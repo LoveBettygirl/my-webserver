@@ -124,7 +124,7 @@ void ThreadPool<T>::run() {
             continue;
         }
 
-        // request->process(); // 处理任务
+        request->process(); // 处理任务
     }
 }
 
