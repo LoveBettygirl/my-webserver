@@ -66,6 +66,7 @@ public:
     static int mUserCount; // 统计用户的数量
     static const int READ_BUFFER_SIZE = 2048;
     static const int WRITE_BUFFER_SIZE = 1024;
+    static const int FILENAME_LENGTH = 200; // 文件名的最大长度
     HttpConn();
     ~HttpConn();
     void process(); // 处理客户端的请求
@@ -88,19 +89,43 @@ private:
     METHOD mMethod; // 请求方法
     char *mHost; // 主机名
     bool mLinger; // 是否保持连接（keep-alive）
+    int mContentLength; // HTTP请求的消息总长度
 
     CHECK_STATE mCheckState; // 主状态机当前所处的状态
+
+    char mRealFile[FILENAME_LENGTH]; // 客户请求的目标文件的完整路径，其内容等于 doc_root + m_url, doc_root是网站根目录
+    char mWriteBuf[WRITE_BUFFER_SIZE];  // 写缓冲区
+    int mWriteIndex; // 写缓冲区中待发送的字节数
+    char *mFileAddress; // 客户请求的目标文件被mmap到内存中的起始位置
+    struct stat mFileStat; // 目标文件的状态。通过它我们可以判断文件是否存在、是否为目录、是否可读，并获取文件大小等信息
+    struct iovec m_iv[2]; // 要写的内存块，有两块：一块是空行前面的响应行（mWriteBuf），另一块是空行之后的文件缓冲区（mFileAddress）
+    int m_iv_Count; // 被写内存块的数量
+
+    int mBytesHaveSend; // 将要发送的数据的字节数
+    int mBytesToSend; // 已经发送的字节数
 
     void initInfos(); // 初始化连接的其余信息
 
     HTTP_CODE processRead(); // 解析HTTP请求，主状态机
+    bool processWrite(HTTP_CODE ret);
     HTTP_CODE parseRequestLine(char *text); // 解析请求首行
     HTTP_CODE parseHeaders(char *text); // 解析请求头
     HTTP_CODE parseContent(char *text); // 解析请求体
 
+    bool addStatusLine(int status, const char* title); // 生成响应首行
+    bool addResponse(const char *format, ...); // 往缓冲区中写入待发送的数据
+    void addHeaders(int contentLen); // 生成响应头
+    bool addContentLength(int contentLen);
+    bool addContentType();
+    bool addLinger();
+    bool addBlankLine();
+    bool addContent(const char *content);
+
     LINE_STATUS parseLine();
 
     HTTP_CODE doRequest();
+
+    void unmap(); // 解除对文件的内存映射
 
     // 获取一行数据
     char *getLine() {

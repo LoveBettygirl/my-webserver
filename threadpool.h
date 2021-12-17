@@ -117,6 +117,7 @@ void ThreadPool<T>::run() {
         }
 
         T *request = m_workqueue.front(); // 获取第一个任务
+        std::cout << "get request!!!" << std::endl;
         m_workqueue.pop_front();
         m_queuelocker.unlock();
 
