@@ -2,6 +2,7 @@
 
 int HttpConn::m_epollfd = -1;
 int HttpConn::mUserCount = 0;
+sort_timer_lst HttpConn::timer_lst;
 
 // 定义HTTP响应的一些状态信息
 const char *ok_200_Title = "OK";
@@ -31,6 +32,16 @@ void addfd(int epollfd, int fd, bool one_shot) {
     if (one_shot) {
         event.events |= EPOLLONESHOT;
     }
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+
+    // 设置文件描述符非阻塞
+    setnonblocking(fd);
+}
+
+void addOtherfd(int epollfd, int fd) {
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET; // TODO: 是否使用ET可以作为程序的选项
     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
 
     // 设置文件描述符非阻塞
@@ -73,6 +84,11 @@ void HttpConn::init(int sockfd, const sockaddr_in &addr) {
     addfd(m_epollfd, sockfd, true);
     mUserCount++; // 总用户数+1
 
+    // 创建定时器，设置其回调函数与超时时间，然后绑定定时器与用户数据，最后将定时器添加到链表timer_lst中
+    mTimer = new util_timer;
+    mTimer->expire = time(nullptr) + 3 * TIMESLOT;
+    timer_lst.add_timer(mTimer);
+
     initInfos();
 }
 
@@ -81,6 +97,9 @@ void HttpConn::closeConn() {
         removefd(m_epollfd, m_sockfd);
         m_sockfd = -1;
         mUserCount--; // 关闭一个连接，客户总数量-1
+        if (mTimer) {
+            timer_lst.del_timer(mTimer);
+        }
     }
 }
 
@@ -108,6 +127,11 @@ bool HttpConn::read() {
         mReadIndex += bytesRead;
     }
     std::cout << "读取到的数据：" << mReadBuf << std::endl;
+    if (mTimer) {
+        mTimer->expire = time(nullptr) + 3 * TIMESLOT;
+        std::cout << "adjust timer once" << std::endl;
+        timer_lst.adjust_timer(mTimer);
+    }
     return true;
 }
 
@@ -121,7 +145,7 @@ bool HttpConn::write() {
         return true;
     }
 
-    while(1) {
+    while (true) {
         // 分散写
         // 有多块内存的数据要写，一起写出去
         temp = writev(m_sockfd, m_iv, m_iv_Count);
@@ -152,7 +176,7 @@ bool HttpConn::write() {
         if (mBytesHaveSend >= m_iv[0].iov_len) {
             m_iv[0].iov_len = 0;
             m_iv[1].iov_base = mFileAddress + (mBytesHaveSend - mWriteIndex);
-            m_iv[1].iov_len = mBytesHaveSend;
+            m_iv[1].iov_len = mBytesToSend;
         }
         else {
             m_iv[0].iov_base = mWriteBuf + mBytesHaveSend;
@@ -163,6 +187,7 @@ bool HttpConn::write() {
             // 没有数据要发送了
             unmap();
             modifyfd(m_epollfd, m_sockfd, EPOLLIN);
+            std::cout << "modify to read" << std::endl;
 
             if (mLinger) {
                 initInfos();
@@ -189,7 +214,7 @@ void HttpConn::initInfos() {
     mHost = nullptr;
     mMethod = GET;
     memset(mReadBuf, 0, READ_BUFFER_SIZE);
-    memset(mWriteBuf, 0, READ_BUFFER_SIZE);
+    memset(mWriteBuf, 0, WRITE_BUFFER_SIZE);
     memset(mRealFile, 0, FILENAME_LENGTH);
     mLinger = false;
 }
@@ -251,6 +276,7 @@ HttpConn::HTTP_CODE HttpConn::processRead() {
             {
                 ret = parseRequestLine(text);
                 if (ret == BAD_REQUEST) {
+                    std::cout << "CHECK_STATE_REQUESTLINE: bad" << std::endl;
                     return BAD_REQUEST;
                 }
                 break;
@@ -259,6 +285,7 @@ HttpConn::HTTP_CODE HttpConn::processRead() {
             {
                 ret = parseHeaders(text);
                 if (ret == BAD_REQUEST) {
+                    std::cout << "CHECK_STATE_HEADER: bad" << std::endl;
                     return BAD_REQUEST;
                 } else if (ret == GET_REQUEST) { // 已经获得了完整的请求
                     return doRequest(); // 解析具体的请求信息
@@ -345,6 +372,7 @@ bool HttpConn::processWrite(HTTP_CODE ret) {
             }
             break;
         case BAD_REQUEST:
+            std::cout << "write bad" << std::endl;
             addStatusLine(400, error_400_Title);
             addHeaders(strlen(error_400_Form));
             if (!addContent(error_400_Form)) {
@@ -382,11 +410,14 @@ bool HttpConn::processWrite(HTTP_CODE ret) {
     m_iv[0].iov_base = mWriteBuf;
     m_iv[0].iov_len = mWriteIndex;
     m_iv_Count = 1;
+    mBytesToSend = mWriteIndex;
+    std::cout << "write bad!!!" << std::endl;
     return true;
 }
 
 // 解析HTTP请求行，获得请求方法，目标URL，HTTP版本
 HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text) {
+    std::cout << "parseRequestLine: " << text << std::endl;
     // TODO: 用正则表达式会简单一些
     // 获取请求方法
     mUrl = strpbrk(text, " \t");
@@ -451,7 +482,7 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text) {
     } else if (strncasecmp(text, "Host:", 5) == 0) {
         // 处理Host头部字段
         text += 5;
-        text += strspn( text, " \t" );
+        text += strspn(text, " \t");
         mHost = text;
     } else {
         std::cout << "oop! unknown header " << text << std::endl;
@@ -515,5 +546,6 @@ void HttpConn::process() {
     if (!writeRet) {
         closeConn();
     }
+    std::cout << "modify to write" << std::endl;
     modifyfd(m_epollfd, m_sockfd, EPOLLOUT);
 }

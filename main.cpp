@@ -9,15 +9,29 @@
 #include <sys/epoll.h>
 #include <signal.h>
 #include <vector>
+#include <functional>
 #include "locker.h"
 #include "threadpool.h"
 #include "http_conn.h"
+
+using namespace std;
 
 // 最大的文件描述符个数
 #define MAX_FD 65535
 
 // 一次监听的最大的事件数量
 #define MAX_EVENT_NUM 10000
+
+static int pipefd[2];
+static int epollfd = 0;
+
+void sigHandler(int sig)
+{
+    int save_errno = errno;
+    int msg = sig;
+    send(pipefd[1], reinterpret_cast<char*>(&msg), 1, 0);
+    errno = save_errno;
+}
 
 // 注册信号处理函数
 void addsig(int sig, void (*handler)(int)) {
@@ -26,6 +40,14 @@ void addsig(int sig, void (*handler)(int)) {
     sa.sa_handler = handler;
     sigemptyset(&sa.sa_mask);
     sigaction(sig, &sa, nullptr);
+}
+
+void timerHandler()
+{
+    // 定时处理任务，实际上就是调用tick()函数
+    HttpConn::timer_lst.tick();
+    // 因为一次 alarm 调用只会引起一次SIGALARM 信号，所以我们要重新定时，以不断触发 SIGALARM信号。
+    alarm(TIMESLOT);
 }
 
 // TODO: getopt
@@ -49,9 +71,6 @@ int main(int argc, char *argv[]) {
     } catch (...) {
         exit(-1);
     }
-
-    // 创建一个数组保存所有客户端信息
-    HttpConn *users = new HttpConn[MAX_FD]; // 哈希表？
 
     // 创建监听的套接字
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -79,24 +98,45 @@ int main(int argc, char *argv[]) {
     }
 
     // 监听
-    listen(listenfd, 5);
+    if (listen(listenfd, 5) == -1) {
+        perror("listen");
+        exit(-1);
+    }
 
     // 创建epoll对象，事件数组，添加
     epoll_event events[MAX_EVENT_NUM];
-    int epollfd = epoll_create(5);
+    epollfd = epoll_create(5);
     if (epollfd == -1) {
         perror("epoll_create");
         exit(-1);
     }
-
-    // 将监听的文件描述符添加到epoll对象中
-    addfd(epollfd, listenfd, false);
     HttpConn::m_epollfd = epollfd;
 
-    while (true) {
+    // 将监听的文件描述符添加到epoll对象中
+    addOtherfd(epollfd, listenfd);
+
+    // 创建管道
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd) == -1) {
+        perror("socketpair");
+        exit(-1);
+    }
+    setnonblocking(pipefd[1]);
+    addOtherfd(epollfd, pipefd[0]);
+
+    // 设置信号处理函数
+    addsig(SIGALRM, sigHandler);
+    addsig(SIGTERM, sigHandler);
+    bool stopServer = false;
+
+    HttpConn* users = new HttpConn[MAX_FD]; // 哈希表
+    bool timeout = false;
+    alarm(TIMESLOT);  // 定时，5秒后产生SIGALARM信号
+
+    while (!stopServer) {
         int num = epoll_wait(epollfd, events, MAX_EVENT_NUM, -1);
         if (num < 0 && errno != EINTR) {
             std::cerr << "epoll failed" << std::endl;
+            break;
         }
 
         // 循环遍历事件数组
@@ -121,6 +161,32 @@ int main(int argc, char *argv[]) {
 
                 // 将新的客户端数据初始化，放到数组中
                 users[connfd].init(connfd, client_address);
+            } else if ((sockfd == pipefd[0]) && (events[i].events & EPOLLIN)) {
+                // 说明有信号到来，要处理信号
+                int sig;
+                char signals[1024];
+                int ret = recv(pipefd[0], signals, sizeof(signals), 0);
+                if (ret == -1) {
+                    continue;
+                } else if (ret == 0) {
+                    continue;
+                } else {
+                    for(int i = 0; i < ret; ++i) {
+                        switch (signals[i])  {
+                            case SIGALRM:
+                            {
+                                // 用timeout变量标记有定时任务需要处理，但不立即处理定时任务
+                                // 这是因为定时任务的优先级不是很高，我们优先处理其他更重要的任务。
+                                timeout = true;
+                                break;
+                            }
+                            case SIGTERM:
+                            {
+                                stopServer = true;
+                            }
+                        }
+                    }
+                }
             } else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
                 // 对方异常端口或者错误等事件
                 // 关闭连接
@@ -140,10 +206,18 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
+
+        // 最后处理定时事件，因为I/O事件有更高的优先级。当然，这样做将导致定时任务不能精准的按照预定的时间执行。
+        if (timeout) {
+            timerHandler();
+            timeout = false;
+        }
     }
 
     close(epollfd);
     close(listenfd);
+    close(pipefd[1]);
+    close(pipefd[0]);
     delete []users;
     delete pool;
 
