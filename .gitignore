@@ -5,3 +5,5 @@
 */.vscode
 .history
 */.history
+obj/
+logs/

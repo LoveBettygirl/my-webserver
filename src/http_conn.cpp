@@ -1,112 +1,68 @@
 #include "http_conn.h"
 
+using namespace std;
+
 int HttpConn::m_epollfd = -1;
 int HttpConn::mUserCount = 0;
-sort_timer_lst HttpConn::timer_lst;
+TimerList HttpConn::timerList;
 
-// 定义HTTP响应的一些状态信息
-const char *ok_200_Title = "OK";
-const char *error_400_Title = "Bad Request";
-const char *error_400_Form = "Your request has bad syntax or is inherently impossible to satisfy.\n";
-const char *error_403_Title = "Forbidden";
-const char *error_403_Form = "You do not have permission to get file from this server.\n";
-const char *error_404_Title = "Not Found";
-const char *error_404_Form = "The requested file was not found on this server.\n";
-const char *error_500_Title = "Internal Error";
-const char *error_500_Form = "There was an unusual problem serving the requested file.\n";
+const char *HttpConn::OK_200_TITLE = "OK";
+const char *HttpConn::ERROR_400_TITLE = "Bad Request";
+const char *HttpConn::ERROR_400_FORM = "Your request has bad syntax or is inherently impossible to satisfy.\n";
+const char *HttpConn::ERROR_403_TITLE = "Forbidden";
+const char *HttpConn::ERROR_403_FORM = "You do not have permission to get file from this server.\n";
+const char *HttpConn::ERROR_404_TITLE = "Not Found";
+const char *HttpConn::ERROR_404_FORM = "The requested file was not found on this server.\n";
+const char *HttpConn::ERROR_500_TITLE = "Internal Error";
+const char *HttpConn::ERROR_500_FORM = "There was an unusual problem serving the requested file.\n";
 
-const char *docRoot = "/root/webserver/resources"; // TODO: 网站根目录，资源的根路径
+string HttpConn::docRoot = "./resources"; // TODO: 网站根目录，资源的根路径
 
-int setnonblocking(int fd) {
-    int oldFlag = fcntl(fd, F_GETFL);
-    int newFlag = oldFlag | O_NONBLOCK;
-    fcntl(fd, F_SETFL, newFlag);
-    return oldFlag;
-}
+HttpConn::HttpConn() {}
 
-void addfd(int epollfd, int fd, bool one_shot) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLRDHUP | EPOLLET; // TODO: 是否使用ET可以作为程序的选项
+HttpConn::~HttpConn() {}
 
-    if (one_shot) {
-        event.events |= EPOLLONESHOT;
-    }
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-
-    // 设置文件描述符非阻塞
-    setnonblocking(fd);
-}
-
-void addOtherfd(int epollfd, int fd) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET; // TODO: 是否使用ET可以作为程序的选项
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-
-    // 设置文件描述符非阻塞
-    setnonblocking(fd);
-}
-
-void removefd(int epollfd, int fd) {
-    epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-}
-
-// 重置socket上的EPOLLONESHOT事件，以确保下一次可读时，EPOLLON能被触发
-void modifyfd(int epollfd, int fd, int ev) {
-    epoll_event event;
-    event.data.fd = fd;
-    event.events = ev | EPOLLRDHUP | EPOLLONESHOT; // TODO: 是否使用ET可以作为程序的选项
-    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
-}
-
-HttpConn::HttpConn() {
-
-}
-
-HttpConn::~HttpConn() {
-
-}
-
-void HttpConn::init(int sockfd, const sockaddr_in &addr) {
+void HttpConn::init(int sockfd, const sockaddr_in &addr, shared_ptr<HttpConn> self)
+{
     m_sockfd = sockfd;
     m_address = addr;
     // 设置端口复用
     // 端口复用一定要在绑定前设置
     int reuse = 1;
-    if (setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
+    if (setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) == -1) {
         perror("setsockopt");
-        exit(-1);
+        exit(SET_REUSE_PORT_ERROR);
     }
 
     // 添加到epoll对象中
     addfd(m_epollfd, sockfd, true);
     mUserCount++; // 总用户数+1
 
-    // 创建定时器，设置其回调函数与超时时间，然后绑定定时器与用户数据，最后将定时器添加到链表timer_lst中
-    mTimer = new util_timer;
-    mTimer->expire = time(nullptr) + 3 * TIMESLOT;
-    timer_lst.add_timer(mTimer);
+    // 创建定时器
+    mTimer = make_shared<Timer>();
+    mTimer->setExpire(time(nullptr) + 3 * TIMESLOT);
+    mTimer->setUserData(self);
+    timerList.addTimer(mTimer);
 
     initInfos();
 }
 
-void HttpConn::closeConn() {
+void HttpConn::closeConn()
+{
     if (m_sockfd != -1) {
         removefd(m_epollfd, m_sockfd);
         m_sockfd = -1;
         mUserCount--; // 关闭一个连接，客户总数量-1
         if (mTimer) {
-            timer_lst.del_timer(mTimer);
+            timerList.delTimer(mTimer);
         }
     }
 }
 
 // 循环读取用户数据，直到无数据可读或者对方关闭连接
-bool HttpConn::read() {
+bool HttpConn::read()
+{
     // 缓冲区已满
-    std::cout << "read!!!" << std::endl;
     if (mReadIndex >= READ_BUFFER_SIZE) {
         return false;
     }
@@ -128,14 +84,13 @@ bool HttpConn::read() {
     }
     std::cout << "读取到的数据：" << mReadBuf << std::endl;
     if (mTimer) {
-        mTimer->expire = time(nullptr) + 3 * TIMESLOT;
-        std::cout << "adjust timer once" << std::endl;
-        timer_lst.adjust_timer(mTimer);
+        timerList.adjustTimer(mTimer, time(nullptr) + 3 * TIMESLOT);
     }
     return true;
 }
 
-bool HttpConn::write() {
+bool HttpConn::write()
+{
     int temp = 0;
     
     if (mBytesToSend == 0) {
@@ -161,18 +116,7 @@ bool HttpConn::write() {
         }
         mBytesToSend -= temp;
         mBytesHaveSend += temp;
-        // if (bytesToSend <= bytesHaveSend) {
-        //     // 发送HTTP响应成功，根据HTTP请求中的Connection字段决定是否立即关闭连接
-        //     unmap();
-        //     if (mLinger) {
-        //         initInfos();
-        //         modifyfd(m_epollfd, m_sockfd, EPOLLIN);
-        //         return true;
-        //     } else {
-        //         modifyfd(m_epollfd, m_sockfd, EPOLLIN);
-        //         return false;
-        //     } 
-        // }
+
         if (mBytesHaveSend >= m_iv[0].iov_len) {
             m_iv[0].iov_len = 0;
             m_iv[1].iov_base = mFileAddress + (mBytesHaveSend - mWriteIndex);
@@ -187,7 +131,6 @@ bool HttpConn::write() {
             // 没有数据要发送了
             unmap();
             modifyfd(m_epollfd, m_sockfd, EPOLLIN);
-            std::cout << "modify to read" << std::endl;
 
             if (mLinger) {
                 initInfos();
@@ -200,7 +143,8 @@ bool HttpConn::write() {
     }
 }
 
-void HttpConn::initInfos() {
+void HttpConn::initInfos()
+{
     mBytesHaveSend = 0;
     mBytesToSend = 0;
     mCheckState = CHECK_STATE_REQUESTLINE; // 初始化状态为解析请求首行
@@ -208,10 +152,10 @@ void HttpConn::initInfos() {
     mStartLine = 0;
     mReadIndex = 0;
     mWriteIndex = 0;
-    mUrl = nullptr;
-    mVersion = nullptr;
+    mUrl = "";
+    mVersion = "";
     mContentLength = 0;
-    mHost = nullptr;
+    mHost = "";
     mMethod = GET;
     memset(mReadBuf, 0, READ_BUFFER_SIZE);
     memset(mWriteBuf, 0, WRITE_BUFFER_SIZE);
@@ -219,7 +163,8 @@ void HttpConn::initInfos() {
     mLinger = false;
 }
 
-void HttpConn::unmap() {
+void HttpConn::unmap()
+{
     if (mFileAddress) {
         munmap(mFileAddress, mFileStat.st_size);
         mFileAddress = 0;
@@ -228,9 +173,9 @@ void HttpConn::unmap() {
 
 HttpConn::HTTP_CODE HttpConn::doRequest() {
     // 已获得完整请求，要去执行这个请求
-    strcpy(mRealFile, docRoot);
-    int len = strlen(docRoot);
-    strncpy(mRealFile + len, mUrl, FILENAME_LENGTH - len - 1); // 从请求首行和根目录，得到要找的资源的路径
+    // 从请求首行和根目录，得到要找的资源的路径
+    string filename = docRoot + mUrl;
+    strcpy(mRealFile, filename.c_str());
     // 获取m_real_file文件的相关的状态信息，-1失败，0成功
     if (stat(mRealFile, &mFileStat) < 0) {
         return NO_RESOURCE; // 没有这个文件
@@ -254,46 +199,40 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
     return FILE_REQUEST;
 }
 
-HttpConn::HTTP_CODE HttpConn::processRead() {
-    std::cout << "process read" << std::endl;
+HttpConn::HTTP_CODE HttpConn::processRead()
+{
     LINE_STATUS lineStatus = LINE_OK;
     HTTP_CODE ret = NO_REQUEST;
 
-    char *text = nullptr;
+    // char *text = nullptr;
 
     // 解析到了请求体也是完整的数据
     // 或者解析到了一行完整的数据
     while (((mCheckState == CHECK_STATE_CONTENT) && (lineStatus == LINE_OK))
         || ((lineStatus = parseLine()) == LINE_OK)) {
-        std::cout << "get line" << std::endl;
         // 获取一行数据
-        text = getLine();
+        char *text = getLine();
         mStartLine = mCheckedIndex;
         std::cout << "got 1 http line: " << text << std::endl;
 
         switch (mCheckState) {
-            case CHECK_STATE_REQUESTLINE:
-            {
+            case CHECK_STATE_REQUESTLINE: {
                 ret = parseRequestLine(text);
                 if (ret == BAD_REQUEST) {
-                    std::cout << "CHECK_STATE_REQUESTLINE: bad" << std::endl;
                     return BAD_REQUEST;
                 }
                 break;
             }
-            case CHECK_STATE_HEADER:
-            {
+            case CHECK_STATE_HEADER: {
                 ret = parseHeaders(text);
                 if (ret == BAD_REQUEST) {
-                    std::cout << "CHECK_STATE_HEADER: bad" << std::endl;
                     return BAD_REQUEST;
                 } else if (ret == GET_REQUEST) { // 已经获得了完整的请求
                     return doRequest(); // 解析具体的请求信息
                 }
                 break;
             }
-            case CHECK_STATE_CONTENT:
-            {
+            case CHECK_STATE_CONTENT: {
                 ret = parseContent(text);
                 if (ret == GET_REQUEST) { // 已经获得了完整的请求
                     return doRequest(); // 解析具体的请求信息
@@ -301,8 +240,7 @@ HttpConn::HTTP_CODE HttpConn::processRead() {
                 lineStatus = LINE_OPEN; // 失败，请求数据不完整
                 break;
             }
-            default:
-            {
+            default: {
                 return INTERNAL_ERROR;
             }
         }
@@ -310,7 +248,8 @@ HttpConn::HTTP_CODE HttpConn::processRead() {
     return NO_REQUEST;
 }
 
-bool HttpConn::addResponse(const char *format, ...) {
+bool HttpConn::addResponse(const char *format, ...)
+{
     // 缓冲区写满了
     if(mWriteIndex >= WRITE_BUFFER_SIZE) {
         return false;
@@ -327,16 +266,24 @@ bool HttpConn::addResponse(const char *format, ...) {
     return true;
 }
 
-bool HttpConn::addStatusLine(int status, const char *title) {
+bool HttpConn::addStatusLine(int status, const char *title)
+{
     return addResponse("%s %d %s\r\n", "HTTP/1.1", status, title);
 }
 
-bool HttpConn::addContentLength(int contentLen) {
+bool HttpConn::addContentLength(int contentLen)
+{
     return addResponse("Content-Length: %d\r\n", contentLen);
 }
 
-bool HttpConn::addContentType() {
-    return addResponse("Content-Type:%s\r\n", "text/html");
+bool HttpConn::addContentType()
+{
+    return addResponse("Content-Type: %s\r\n", "text/html");
+}
+
+bool HttpConn::addServerInfo()
+{
+    return addResponse("Server: %s\r\n", "MyHTTPServer/1.0");
 }
 
 bool HttpConn::addLinger()
@@ -354,47 +301,48 @@ bool HttpConn::addContent(const char *content)
     return addResponse("%s", content);
 }
 
-void HttpConn::addHeaders(int contentLen) {
+void HttpConn::addHeaders(int contentLen)
+{
     addContentLength(contentLen);
     addContentType();
     addLinger();
+    addServerInfo();
     addBlankLine();
 }
 
-bool HttpConn::processWrite(HTTP_CODE ret) {
-    switch (ret)
-    {
+bool HttpConn::processWrite(HTTP_CODE ret)
+{
+    switch (ret) {
         case INTERNAL_ERROR:
-            addStatusLine(500, error_500_Title);
-            addHeaders(strlen( error_500_Form) );
-            if (!addContent(error_500_Form)) {
+            addStatusLine(500, ERROR_500_TITLE);
+            addHeaders(strlen(ERROR_500_FORM));
+            if (!addContent(ERROR_500_FORM)) {
                 return false;
             }
             break;
         case BAD_REQUEST:
-            std::cout << "write bad" << std::endl;
-            addStatusLine(400, error_400_Title);
-            addHeaders(strlen(error_400_Form));
-            if (!addContent(error_400_Form)) {
+            addStatusLine(400, ERROR_400_TITLE);
+            addHeaders(strlen(ERROR_400_FORM));
+            if (!addContent(ERROR_400_FORM)) {
                 return false;
             }
             break;
         case NO_RESOURCE:
-            addStatusLine(404, error_404_Title);
-            addHeaders(strlen(error_404_Form));
-            if (!addContent(error_404_Form)) {
+            addStatusLine(404, ERROR_404_TITLE);
+            addHeaders(strlen(ERROR_404_FORM));
+            if (!addContent(ERROR_404_FORM)) {
                 return false;
             }
             break;
         case FORBIDDEN_REQUEST:
-            addStatusLine(403, error_403_Title);
-            addHeaders(strlen(error_403_Form));
-            if (!addContent(error_403_Form)) {
+            addStatusLine(403, ERROR_403_TITLE);
+            addHeaders(strlen(ERROR_403_FORM));
+            if (!addContent(ERROR_403_FORM)) {
                 return false;
             }
             break;
         case FILE_REQUEST:
-            addStatusLine(200, ok_200_Title);
+            addStatusLine(200, OK_200_TITLE);
             addHeaders(mFileStat.st_size);
             m_iv[0].iov_base = mWriteBuf;
             m_iv[0].iov_len = mWriteIndex;
@@ -411,44 +359,44 @@ bool HttpConn::processWrite(HTTP_CODE ret) {
     m_iv[0].iov_len = mWriteIndex;
     m_iv_Count = 1;
     mBytesToSend = mWriteIndex;
-    std::cout << "write bad!!!" << std::endl;
     return true;
 }
 
 // 解析HTTP请求行，获得请求方法，目标URL，HTTP版本
-HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text) {
+HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
+{
+    string str(text);
     std::cout << "parseRequestLine: " << text << std::endl;
     // TODO: 用正则表达式会简单一些
     // 获取请求方法
-    mUrl = strpbrk(text, " \t");
-    if (!mUrl) {
-        return BAD_REQUEST;
-    }
-    *mUrl++ = '\0';
-    char *method = text;
-    if (strcasecmp(method, "GET") == 0) {
-        mMethod = GET;
-    } else {
-        return BAD_REQUEST;
+    istringstream is(str);
+    string temp;
+    int i = 0;
+    while (is >> temp) {
+        if (i == 0) { // 请求方法
+            if (temp == "GET") {
+                mMethod = GET;
+            } else {
+                return BAD_REQUEST;
+            }
+        } else if (i == 1) { // url
+            mUrl = temp;
+            size_t index = mUrl.find("http://");
+            if (index != string::npos) {
+                if (index != 0)
+                    return BAD_REQUEST;
+                mUrl = mUrl.substr(mUrl.find("/", index));
+            }
+        } else if (i == 2) { // version
+            if (temp != "HTTP/1.1") {
+                return BAD_REQUEST;
+            }
+            mVersion = temp;
+        }
+        i++;
     }
 
-    // 获取版本
-    mVersion = strpbrk(mUrl, " \t");
-    if (!mVersion) {
-        return BAD_REQUEST;
-    }
-    *mVersion++ = '\0';
-    if (strcasecmp(mVersion, "HTTP/1.1") != 0) {
-        return BAD_REQUEST;
-    }
-
-    // 解析资源
-    if (strncasecmp(mUrl, "http://", 7) == 0) {
-        mUrl += 7;
-        mUrl = strchr(mUrl, '/'); // find()
-    }
-
-    if (!mUrl || mUrl[0] != '/') {
+    if (i != 3) {
         return BAD_REQUEST;
     }
 
@@ -456,7 +404,8 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text) {
     return NO_REQUEST;
 }
 
-HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text) {
+HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text)
+{
     // 遇到空行，表示头部字段解析完毕
     if(text[0] == '\0') {
         // 如果HTTP请求有消息体，则还需要读取m_content_length字节的消息体，
@@ -467,30 +416,44 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text) {
         }
         // 否则说明我们已经得到了一个完整的HTTP请求
         return GET_REQUEST;
-    } else if (strncasecmp(text, "Connection:", 11) == 0) {
+    }
+    string str(text);
+    istringstream is(str);
+    string temp, key, value;
+    int i = 0;
+    while (is >> temp) {
+        if (i == 0) {
+            key = temp;
+        } else if (i == 1) {
+            value = temp;
+        }
+        i++;
+    }
+
+    if (i != 2) {
+        std::cout << "oop! unknown header " << text << std::endl;
+        return NO_REQUEST;
+    }
+    
+    if (key == "Connection:") {
         // 处理Connection 头部字段  Connection: keep-alive
-        text += 11;
-        text += strspn(text, " \t" );
-        if (strcasecmp(text, "keep-alive") == 0) {
+        if (value == "keep-alive") {
             mLinger = true; // 保持连接
         }
-    } else if (strncasecmp(text, "Content-Length:", 15) == 0) {
+    } else if (key == "Content-Length:") {
         // 处理Content-Length头部字段
-        text += 15;
-        text += strspn(text, " \t");
-        mContentLength = atol(text);
-    } else if (strncasecmp(text, "Host:", 5) == 0) {
+        mContentLength = stol(value);
+    } else if (key == "Host:") {
         // 处理Host头部字段
-        text += 5;
-        text += strspn(text, " \t");
-        mHost = text;
+        mHost = value;
     } else {
         std::cout << "oop! unknown header " << text << std::endl;
     }
     return NO_REQUEST;
 }
 
-HttpConn::HTTP_CODE HttpConn::parseContent(char *text) {
+HttpConn::HTTP_CODE HttpConn::parseContent(char *text)
+{
     // 数据是否被完整读入
     if (mReadIndex >= (mContentLength + mCheckedIndex)) {
         text[mContentLength] = '\0';
@@ -530,13 +493,11 @@ HttpConn::LINE_STATUS HttpConn::parseLine() {
 }
 
 // 由线程池中的工作线程调用，这是处理HTTP请求的入口函数
-void HttpConn::process() {
-    std::cout << "process!!!" << std::endl;
+void HttpConn::process()
+{
     // 解析HTPP请求
     HTTP_CODE readRet = processRead(); // 解析一些请求有不同的情况
-    std::cout << readRet << std::endl;
     if (readRet == NO_REQUEST) { // 请求不完整，要继续获取客户端数据
-        std::cout << "aaaaa" << std::endl;
         modifyfd(m_epollfd, m_sockfd, EPOLLIN);
         return;
     }
@@ -546,6 +507,25 @@ void HttpConn::process() {
     if (!writeRet) {
         closeConn();
     }
-    std::cout << "modify to write" << std::endl;
     modifyfd(m_epollfd, m_sockfd, EPOLLOUT);
+}
+
+void HttpConn::tick()
+{
+    timerList.tick();
+}
+
+void HttpConn::setEpollfd(int fd)
+{
+    m_epollfd = fd;
+}
+
+int HttpConn::getUserCount()
+{
+    return mUserCount;
+}
+
+void HttpConn::setDocRoot(const string &path)
+{
+    docRoot = path;
 }
