@@ -1,18 +1,14 @@
 #ifndef HTTP_CONN_H
 #define HTTP_CONN_H
 
-#include "common.h"
+#include "../common.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
-#include "thread/locker.h"
-#include "Timer.h"
-#include "utils/utils.h"
-#include "epoll/epoll.h"
-
-class Timer;
-class TimerList;
+#include "../thread/locker.h"
+#include "../utils/utils.h"
+#include "../epoll/epoll.h"
 
 class HttpConn {
 private:
@@ -67,16 +63,15 @@ public:
     HttpConn();
     ~HttpConn();
     void process(); // 处理客户端的请求
-    void init(int sockfd, const sockaddr_in &addr, std::shared_ptr<HttpConn> self); // 初始化新接收的连接
+    void init(int sockfd, const sockaddr_in &addr); // 初始化新接收的连接
     void closeConn(); // 关闭连接
     bool read(); // 非阻塞的读
     bool write(); // 非阻塞的写
     static void tick();
     static void setEpollfd(int fd);
     static int getUserCount();
+    static void decUserCount();
     static void setDocRoot(const std::string &path);
-
-    static const int TIMESLOT = 5; // 每隔5s的定时，检测有没有任务超时
 
 private:
     int m_sockfd; // 该HTTP连接的socket
@@ -106,12 +101,9 @@ private:
     int mBytesHaveSend; // 将要发送的数据的字节数
     int mBytesToSend; // 已经发送的字节数
 
-    std::shared_ptr<Timer> mTimer; // 定时器
-
-    static TimerList timerList;
     static int m_epollfd; // 所有的socket上的事件都被注册到同一个epoll对象中
-    static int mUserCount; // 统计用户的数量
     static std::string docRoot;
+    static int mUserCount; // 统计用户的数量
 
 private:
     void initInfos(); // 初始化连接的其余信息

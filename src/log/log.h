@@ -15,14 +15,12 @@ using namespace std;
 
 class Log {
 public:
-    static Log *getInstance()
-    {
+    static Log *getInstance() {
         static Log instance;
         return &instance;
     }
 
-    static void *flushLogThread(void *args)
-    {
+    static void *flushLogThread(void *args) {
         Log::getInstance()->asyncWriteLog();
         return nullptr;
     }
@@ -38,8 +36,7 @@ public:
 private:
     Log();
     virtual ~Log();
-    void *asyncWriteLog()
-    {
+    void *asyncWriteLog() {
         string singleLog;
         //从阻塞队列中取出一个日志string，写入文件
         while (mLogQueue->pop(singleLog)) {

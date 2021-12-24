@@ -1,11 +1,44 @@
 #ifndef TIMER_H
 #define TIMER_H
 
-#include "http_conn.h"
-#include "base/priority_queue.h"
+#include "../http/http_conn.h"
+#include "../base/priority_queue.h"
+#include "../epoll/epoll.h"
+#include <functional>
 using namespace std;
 
-class HttpConn;
+class ClientData;
+class Timer;
+
+class ClientData {
+private:
+    sockaddr_in address;
+    int sockfd;
+    std::shared_ptr<Timer> timer;
+public:
+    ClientData(sockaddr_in addr, int sockfd): address(addr), sockfd(sockfd) {}
+    void setTimer(std::shared_ptr<Timer> timer) {
+        this->timer = timer;
+    }
+    int getSockfd() const {
+        return sockfd;
+    }
+    std::shared_ptr<Timer> getTimer() const {
+        return timer;
+    }
+};
+
+struct Callback {
+    Callback(int epollfd): epollfd(epollfd) {}
+    void operator()(shared_ptr<ClientData> userData) const {
+        if (userData) {
+            removefd(epollfd, userData->getSockfd());
+            HttpConn::decUserCount();
+        }
+    }
+private:
+    int epollfd;
+};
 
 // 定时器类
 class Timer {
@@ -23,16 +56,23 @@ public:
     bool getIsClosed() const {
         return this->isClosed;
     }
-    void setUserData(shared_ptr<HttpConn> data) {
+    void setUserData(shared_ptr<ClientData> data) {
         this->userData = data;
     }
-    weak_ptr<HttpConn> getUserData() const {
+    weak_ptr<ClientData> getUserData() const {
         return this->userData;
+    }
+    void setCallback(function<void(shared_ptr<ClientData>)> callback) {
+        this->callback = callback;
+    }
+    function<void(shared_ptr<ClientData>)> getCallback() const {
+        return callback;
     }
     bool isValid(time_t cur) const;
 private:
     time_t expire;   // 任务超时时间，这里使用绝对时间
-    weak_ptr<HttpConn> userData;
+    std::weak_ptr<ClientData> userData;
+    function<void(shared_ptr<ClientData>)> callback;
     bool isClosed;
 };
 

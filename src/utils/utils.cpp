@@ -5,7 +5,7 @@ void addsig(int sig, void (*handler)(int))
     struct sigaction sa; // 这里必须加struct，要不然和函数名字冲突了
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handler;
-    sigemptyset(&sa.sa_mask);
+    sigfillset(&sa.sa_mask);
     sigaction(sig, &sa, nullptr);
 }
 

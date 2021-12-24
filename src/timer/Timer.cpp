@@ -17,7 +17,6 @@ void TimerList::delTimer(shared_ptr<Timer> timer)
 
 void TimerList::adjustTimer(shared_ptr<Timer> timer, time_t expire)
 {
-    timer->setIsClosed(false);
     timer->setExpire(expire);
     active.adjust();
 }
@@ -39,7 +38,7 @@ void TimerList::tick()
         }
         else if (!temp->isValid(cur)) {
             if (!temp->getUserData().expired())
-                temp->getUserData().lock()->closeConn();
+                temp->getCallback()(temp->getUserData().lock());
             active.pop();
         }
         else

@@ -4,7 +4,6 @@ using namespace std;
 
 int HttpConn::m_epollfd = -1;
 int HttpConn::mUserCount = 0;
-TimerList HttpConn::timerList;
 
 const char *HttpConn::OK_200_TITLE = "OK";
 const char *HttpConn::ERROR_400_TITLE = "Bad Request";
@@ -16,33 +15,27 @@ const char *HttpConn::ERROR_404_FORM = "The requested file was not found on this
 const char *HttpConn::ERROR_500_TITLE = "Internal Error";
 const char *HttpConn::ERROR_500_FORM = "There was an unusual problem serving the requested file.\n";
 
-string HttpConn::docRoot = "./resources"; // TODO: 网站根目录，资源的根路径
+string HttpConn::docRoot = "./resources";
 
 HttpConn::HttpConn() {}
 
 HttpConn::~HttpConn() {}
 
-void HttpConn::init(int sockfd, const sockaddr_in &addr, shared_ptr<HttpConn> self)
+void HttpConn::init(int sockfd, const sockaddr_in &addr)
 {
     m_sockfd = sockfd;
     m_address = addr;
     // 设置端口复用
     // 端口复用一定要在绑定前设置
     int reuse = 1;
-    if (setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) == -1) {
+    if (setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) == -1) {
         perror("setsockopt");
         exit(SET_REUSE_PORT_ERROR);
     }
 
     // 添加到epoll对象中
-    addfd(m_epollfd, sockfd, true);
+    addfd(m_epollfd, sockfd, true, true);
     mUserCount++; // 总用户数+1
-
-    // 创建定时器
-    mTimer = make_shared<Timer>();
-    mTimer->setExpire(time(nullptr) + 3 * TIMESLOT);
-    mTimer->setUserData(self);
-    timerList.addTimer(mTimer);
 
     initInfos();
 }
@@ -53,9 +46,6 @@ void HttpConn::closeConn()
         removefd(m_epollfd, m_sockfd);
         m_sockfd = -1;
         mUserCount--; // 关闭一个连接，客户总数量-1
-        if (mTimer) {
-            timerList.delTimer(mTimer);
-        }
     }
 }
 
@@ -81,10 +71,6 @@ bool HttpConn::read()
             return false;
         }
         mReadIndex += bytesRead;
-    }
-    std::cout << "读取到的数据：" << mReadBuf << std::endl;
-    if (mTimer) {
-        timerList.adjustTimer(mTimer, time(nullptr) + 3 * TIMESLOT);
     }
     return true;
 }
@@ -124,7 +110,8 @@ bool HttpConn::write()
         }
         else {
             m_iv[0].iov_base = mWriteBuf + mBytesHaveSend;
-            m_iv[0].iov_len = m_iv[0].iov_len - temp;
+            // m_iv[0].iov_len = m_iv[0].iov_len - temp;
+            m_iv[0].iov_len = m_iv[0].iov_len - mBytesHaveSend;
         }
 
         if (mBytesToSend <= 0) {
@@ -259,6 +246,7 @@ bool HttpConn::addResponse(const char *format, ...)
     // 从哪开始写入发送数据
     int len = vsnprintf(mWriteBuf + mWriteIndex, WRITE_BUFFER_SIZE - 1 - mWriteIndex, format, argList);
     if (len >= (WRITE_BUFFER_SIZE - 1 - mWriteIndex)) {
+        va_end(argList);
         return false;
     }
     mWriteIndex += len;
@@ -366,7 +354,7 @@ bool HttpConn::processWrite(HTTP_CODE ret)
 HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
 {
     string str(text);
-    std::cout << "parseRequestLine: " << text << std::endl;
+    // std::cout << "parseRequestLine: " << text << std::endl;
     // TODO: 用正则表达式会简单一些
     // 获取请求方法
     istringstream is(str);
@@ -510,11 +498,6 @@ void HttpConn::process()
     modifyfd(m_epollfd, m_sockfd, EPOLLOUT);
 }
 
-void HttpConn::tick()
-{
-    timerList.tick();
-}
-
 void HttpConn::setEpollfd(int fd)
 {
     m_epollfd = fd;
@@ -523,6 +506,11 @@ void HttpConn::setEpollfd(int fd)
 int HttpConn::getUserCount()
 {
     return mUserCount;
+}
+
+void HttpConn::decUserCount()
+{
+    mUserCount--;
 }
 
 void HttpConn::setDocRoot(const string &path)
