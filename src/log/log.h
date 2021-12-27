@@ -67,5 +67,6 @@ private:
 #define LOG_INFO(format, ...) if(!Log::mCloseLog) {Log::getInstance()->writeLog(1, format, ##__VA_ARGS__); Log::getInstance()->flush();}
 #define LOG_WARN(format, ...) if(!Log::mCloseLog) {Log::getInstance()->writeLog(2, format, ##__VA_ARGS__); Log::getInstance()->flush();}
 #define LOG_ERROR(format, ...) if(!Log::mCloseLog) {Log::getInstance()->writeLog(3, format, ##__VA_ARGS__); Log::getInstance()->flush();}
+#define LOG_FATAL(format, ...) if(!Log::mCloseLog) {Log::getInstance()->writeLog(4, format, ##__VA_ARGS__); Log::getInstance()->flush();}
 
 #endif

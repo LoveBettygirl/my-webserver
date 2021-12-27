@@ -50,7 +50,7 @@ void ConnectionPool::init(const string &url, const string &user, const string &p
 
 
 // 当有请求时，从数据库连接池中返回一个可用连接，更新使用和空闲连接数
-MYSQL *ConnectionPool::getConnection()
+unique_ptr<MYSQL, function<void(MYSQL *)>> ConnectionPool::getConnection()
 {
     MYSQL *con = nullptr;
 
@@ -68,7 +68,9 @@ MYSQL *ConnectionPool::getConnection()
     ++mCurConn;
 
     lock.unlock();
-    return con;
+    return unique_ptr<MYSQL, function<void(MYSQL *)>>(con, [](MYSQL *mysql) {
+        ConnectionPool::getInstance()->releaseConnection(mysql);
+    });
 }
 
 // 释放当前使用的连接
@@ -115,15 +117,4 @@ int ConnectionPool::getFreeConn()
 ConnectionPool::~ConnectionPool()
 {
     destroyPool();
-}
-
-ConnectionRAII::ConnectionRAII(MYSQL **SQL, ConnectionPool *connPool){
-    *SQL = connPool->getConnection();
-
-    conRAII = *SQL;
-    poolRAII = connPool;
-}
-
-ConnectionRAII::~ConnectionRAII(){
-    poolRAII->releaseConnection(conRAII);
 }

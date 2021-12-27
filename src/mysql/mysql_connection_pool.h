@@ -11,23 +11,25 @@
 #include "../thread/locker.h"
 #include "../log/log.h"
 #include "../common.h"
+#include <memory>
+#include <functional>
 
 using namespace std;
 
 class ConnectionPool {
 public:
-    MYSQL *getConnection(); // 获取数据库连接
+    unique_ptr<MYSQL, function<void(MYSQL *)>> getConnection(); // 获取数据库连接
     bool releaseConnection(MYSQL *conn); // 释放连接
     int getFreeConn(); // 获取连接
     void destroyPool(); // 销毁所有连接
 
     static ConnectionPool *getInstance();
 
-    void init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn, int closeLog); 
+    void init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn, int closeLog);
 
 private:
     ConnectionPool();
-    ConnectionPool();
+    ~ConnectionPool();
 
     int mMaxConn; // 最大连接数
     int mCurConn; // 当前已使用的连接数
@@ -43,16 +45,6 @@ public:
     string mPassWord; // 登陆数据库密码
     string mDatabaseName; // 使用数据库名
     int mCloseLog; // 日志开关
-};
-
-class ConnectionRAII {
-public:
-    ConnectionRAII(MYSQL **con, ConnectionPool *connPool);
-    ~ConnectionRAII();
-    
-private:
-    MYSQL *conRAII;
-    ConnectionPool *poolRAII;
 };
 
 #endif

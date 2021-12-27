@@ -52,13 +52,13 @@ bool Log::init(const char *filename, int closeLog, int logBufSize, int splitLine
     char logFullName[LOG_PATH_LEN] = {0};
 
     if (p == nullptr) {
-        snprintf(logFullName, LOG_PATH_LEN - 1, "%d_%02d_%02d_%s", my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, filename) < 0 ? abort() : (void)0;
+        snprintf(logFullName, LOG_PATH_LEN - 1, "%d_%02d_%02d_%s.log", my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, filename) < 0 ? abort() : (void)0;
     }
     else {
         strcpy(logName, p + 1);
         strncpy(dirName, filename, p - filename + 1);
         createDir(dirName);
-        snprintf(logFullName, LOG_PATH_LEN - 1, "%s%d_%02d_%02d_%s", dirName, my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, logName) < 0 ? abort() : (void)0;
+        snprintf(logFullName, LOG_PATH_LEN - 1, "%s%d_%02d_%02d_%s.log", dirName, my_tm.tm_year + 1900, my_tm.tm_mon + 1, my_tm.tm_mday, logName) < 0 ? abort() : (void)0;
     }
 
     mToday = my_tm.tm_mday;
@@ -81,19 +81,22 @@ void Log::writeLog(int level, const char *format, ...)
     char s[16] = {0};
     switch (level) {
     case 0:
-        strcpy(s, "[debug]:");
+        strcpy(s, "[DEBUG]:");
         break;
     case 1:
-        strcpy(s, "[info]:");
+        strcpy(s, "[INFO]:");
         break;
     case 2:
-        strcpy(s, "[warn]:");
+        strcpy(s, "[WARN]:");
         break;
     case 3:
-        strcpy(s, "[error]:");
+        strcpy(s, "[ERROR]:");
+        break;
+    case 4:
+        strcpy(s, "[FATAL]:");
         break;
     default:
-        strcpy(s, "[info]:");
+        strcpy(s, "[INFO]:");
         break;
     }
     //写入一个log，对mCount++, mSplitLines最大行数

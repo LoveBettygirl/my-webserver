@@ -9,6 +9,11 @@
 #include "../thread/locker.h"
 #include "../utils/utils.h"
 #include "../epoll/epoll.h"
+#include <unordered_map>
+#include "../mysql/mysql_connection_pool.h"
+#include <algorithm>
+#include <cctype>
+#include <sys/wait.h>
 
 class HttpConn {
 private:
@@ -39,10 +44,11 @@ private:
         NO_RESOURCE: 表示服务器没有资源
         FORBIDDEN_REQUEST: 表示客户对资源没有足够的访问权限
         FILE_REQUEST: 文件请求，获取文件成功
+        CGI_REQUEST: cgi请求成功
         INTERNAL_ERROR: 表示服务器内部错误
         CLOSED_CONNECTION: 表示客户端已经关闭连接了
     */
-    enum HTTP_CODE { NO_REQUEST, GET_REQUEST, BAD_REQUEST, NO_RESOURCE, FORBIDDEN_REQUEST, FILE_REQUEST, INTERNAL_ERROR, CLOSED_CONNECTION };
+    enum HTTP_CODE { NO_REQUEST, GET_REQUEST, BAD_REQUEST, NO_RESOURCE, FORBIDDEN_REQUEST, FILE_REQUEST, CGI_REQUEST, INTERNAL_ERROR, CLOSED_CONNECTION };
 
     // 定义HTTP响应的一些状态信息
     static const char *OK_200_TITLE;
@@ -54,6 +60,14 @@ private:
     static const char *ERROR_404_FORM;
     static const char *ERROR_500_TITLE;
     static const char *ERROR_500_FORM;
+
+    // mimetype
+    static const char *TYPE_HTML;
+    static const char *TYPE_JPEG;
+    static const char *TYPE_PNG;
+    static const char *TYPE_GIF;
+    static const char *TYPE_ICO;
+    static const char *TYPE_MP4;
 
     static const int READ_BUFFER_SIZE = 2048;
     static const int WRITE_BUFFER_SIZE = 1024;
@@ -67,11 +81,13 @@ public:
     void closeConn(); // 关闭连接
     bool read(); // 非阻塞的读
     bool write(); // 非阻塞的写
+    void setMySQL(MYSQL *mysql) { this->mysql = mysql; }
     static void tick();
     static void setEpollfd(int fd);
     static int getUserCount();
     static void decUserCount();
     static void setDocRoot(const std::string &path);
+    static void initMySQLResult();
 
 private:
     int m_sockfd; // 该HTTP连接的socket
@@ -101,9 +117,19 @@ private:
     int mBytesHaveSend; // 将要发送的数据的字节数
     int mBytesToSend; // 已经发送的字节数
 
+    MYSQL *mysql;
+    int cgi;
+    std::string mQueryString;
+    Locker mLock;
+
+    std::string mMimeType;
+    char mCgiBuf[READ_BUFFER_SIZE];  // cgi缓冲区
+    int mCgiLen;
+
     static int m_epollfd; // 所有的socket上的事件都被注册到同一个epoll对象中
     static std::string docRoot;
     static int mUserCount; // 统计用户的数量
+    static std::unordered_map<std::string, std::string> mUsers;
 
 private:
     void initInfos(); // 初始化连接的其余信息

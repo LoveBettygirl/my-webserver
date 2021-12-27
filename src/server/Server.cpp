@@ -5,10 +5,14 @@ using namespace std;
 int WebServer::pipefd[2] = {};
 TimerList WebServer::timerList;
 
-WebServer::WebServer(int port, const string &docRoot):
+WebServer::WebServer(int port, const string &docRoot, int closeLog, const string &user, const string &password, const string &databaseName):
     port(port),
+    mCloseLog(closeLog),
     epollfd(0),
-    listenfd(0)
+    listenfd(0),
+    mUser(user),
+    mPassword(password),
+    mDatabaseName(databaseName)
 {
     if (docRoot != "")
         HttpConn::setDocRoot(docRoot);
@@ -197,7 +201,7 @@ void WebServer::eventLoop()
 void WebServer::logWrite()
 {
     // 初始化日志
-    Log::getInstance()->init("./logs/ServerLog", 0, 2000, 800000, 0);
+    Log::getInstance()->init("./logs/ServerLog", mCloseLog, 2000, 800000, 0);
 }
 
 void WebServer::threadPool()
@@ -209,6 +213,16 @@ void WebServer::threadPool()
         LOG_ERROR("%s", "Create thread pool failed.");
         exit(CREATE_THREAD_POOL_ERROR);
     }
+}
+
+void WebServer::mySqlPool()
+{
+    // 初始化数据库连接池
+    ConnectionPool *connPool = ConnectionPool::getInstance();
+    connPool->init("localhost", mUser, mPassword, mDatabaseName, 3306, 8, mCloseLog);
+
+    // 初始化数据库读取表
+    HttpConn::initMySQLResult();
 }
 
 void WebServer::eventListen()
@@ -283,6 +297,8 @@ void WebServer::eventListen()
 int WebServer::start()
 {
     logWrite();
+
+    mySqlPool();
 
     threadPool();
 

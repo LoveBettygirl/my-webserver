@@ -9,6 +9,7 @@
 #include "../epoll/epoll.h"
 #include "../log/log.h"
 #include "../timer/Timer.h"
+#include "../mysql/mysql_connection_pool.h"
 
 class WebServer {
 private:
@@ -28,8 +29,14 @@ private:
     static const int TIMESLOT = 5; // 每隔5s的定时，检测有没有任务超时
     static TimerList timerList;
 
+    std::string mUser; // 登陆数据库用户名
+    std::string mPassword; // 登陆数据库密码
+    std::string mDatabaseName; // 使用数据库名
+    int mCloseLog;
+
     void logWrite();
     void threadPool();
+    void mySqlPool();
     void eventListen();
     void eventLoop();
     void doWrite(int sockfd);
@@ -41,7 +48,7 @@ private:
     void adjustTimer(std::shared_ptr<Timer> timer);
 
 public:
-    WebServer(int port, const string &docRoot);
+    WebServer(int port, const std::string &docRoot, int closeLog, const std::string &user, const std::string &password, const std::string &databaseName);
     ~WebServer();
     int start();
 
