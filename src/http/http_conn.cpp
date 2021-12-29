@@ -5,16 +5,16 @@ using namespace std;
 int HttpConn::m_epollfd = -1;
 int HttpConn::mUserCount = 0;
 
-const char *HttpConn::OK_200_TITLE = "200 OK";
-const char *HttpConn::OK_200_FORM = "<html><head><meta charset=\"utf-8\"><title>200 OK</title></head><body><h2>200 OK</h2><p>Request success.</p><hr><em>MyHTTPServer</em></body></html>";
-const char *HttpConn::ERROR_400_TITLE = "400 Bad Request";
-const char *HttpConn::ERROR_400_FORM = "<html><head><meta charset=\"utf-8\"><title>400 Bad Request</title></head><body><h2>400 Bad Request</h2><p>Your request has bad syntax or is inherently impossible to satisfy.</p><hr><em>MyHTTPServer</em></body></html>";
-const char *HttpConn::ERROR_403_TITLE = "403 Forbidden";
-const char *HttpConn::ERROR_403_FORM = "<html><head><meta charset=\"utf-8\"><title>403 Forbidden</title></head><body><h2>403 Forbidden</h2><p>You do not have permission to get file from this server.</p><hr><em>MyHTTPServer</em></body></html>";
-const char *HttpConn::ERROR_404_TITLE = "404 Not Found";
-const char *HttpConn::ERROR_404_FORM = "<html><head><meta charset=\"utf-8\"><title>404 Not Found</title></head><body><h2>404 Not Found</h2><p>The requested file was not found on this server.</p><hr><em>MyHTTPServer</em></body></html>";
-const char *HttpConn::ERROR_500_TITLE = "500 Internal Error";
-const char *HttpConn::ERROR_500_FORM = "<html><head><meta charset=\"utf-8\"><title>500 Internal Error</title></head><body><h2>500 Internal Error</h2><p>There was an unusual problem serving the requested file.</p><hr><em>MyHTTPServer</em></body></html>";
+const char *HttpConn::OK_200_TITLE = "OK";
+const char *HttpConn::OK_200_FORM = "<html><head><meta charset=\"utf-8\"><title>200 OK</title></head><body><h2>200 OK</h2><p>Request success.</p><hr><em>MyHTTPServer v1.0</em></body></html>";
+const char *HttpConn::ERROR_400_TITLE = "Bad Request";
+const char *HttpConn::ERROR_400_FORM = "<html><head><meta charset=\"utf-8\"><title>400 Bad Request</title></head><body><h2>400 Bad Request</h2><p>Your request has bad syntax or is inherently impossible to satisfy.</p><hr><em>MyHTTPServer v1.0</em></body></html>";
+const char *HttpConn::ERROR_403_TITLE = "Forbidden";
+const char *HttpConn::ERROR_403_FORM = "<html><head><meta charset=\"utf-8\"><title>403 Forbidden</title></head><body><h2>403 Forbidden</h2><p>You do not have permission to get file from this server.</p><hr><em>MyHTTPServer v1.0</em></body></html>";
+const char *HttpConn::ERROR_404_TITLE = "Not Found";
+const char *HttpConn::ERROR_404_FORM = "<html><head><meta charset=\"utf-8\"><title>404 Not Found</title></head><body><h2>404 Not Found</h2><p>The requested file was not found on this server.</p><hr><em>MyHTTPServer v1.0</em></body></html>";
+const char *HttpConn::ERROR_500_TITLE = "Internal Error";
+const char *HttpConn::ERROR_500_FORM = "<html><head><meta charset=\"utf-8\"><title>500 Internal Error</title></head><body><h2>500 Internal Error</h2><p>There was an unusual problem serving the requested file.</p><hr><em>MyHTTPServer v1.0</em></body></html>";
 
 const char *HttpConn::TYPE_BIN = "application/octet-stream";
 
@@ -116,7 +116,6 @@ bool HttpConn::read()
     // 读取到的字节
     int bytesRead = 0;
     while (true) {
-        // bytesRead = recv(m_sockfd, mReadBuf + mReadIndex, READ_BUFFER_SIZE - mReadIndex, 0);
         int readErrno = 0;
         bytesRead = readBuffer.readFd(m_sockfd, &readErrno);
         if (bytesRead == -1) {
@@ -370,6 +369,7 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                 char queryEnv[255] = {0};
                 char lengthEnv[255] = {0};
                 char typeEnv[255] = {0};
+                char rootEnv[255] = {0};
 
                 dup2(cgiOutput[1], 1);
                 dup2(cgiInput[0], 0);
@@ -379,6 +379,13 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
 
                 if (mMethod == GET) {
                     strcpy(methEnv, "REQUEST_METHOD=GET");
+                    putenv(methEnv);
+                    // 存储QUERY_STRING
+                    sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
+                    putenv(queryEnv);
+                }
+                else if (mMethod == HEAD) {
+                    strcpy(methEnv, "REQUEST_METHOD=HEAD");
                     putenv(methEnv);
                     // 存储QUERY_STRING
                     sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
@@ -394,6 +401,8 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                     sprintf(typeEnv, "CONTENT_TYPE=%s", mContentType.c_str());
                     putenv(typeEnv);
                 }
+                sprintf(rootEnv, "DOCUMENT_ROOT=%s", docRoot.c_str());
+                putenv(rootEnv);
 
                 execl(mRealFile, mRealFile, nullptr);
             }
@@ -642,7 +651,11 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             break;
         case FILE_REQUEST:
             addStatusLine(200, OK_200_TITLE);
-            if (mFileStat.st_size != 0) {
+            if (mMethod == HEAD) {
+                addHeaders(mFileStat.st_size);
+                break;
+            }
+            else if (mFileStat.st_size != 0) {
                 addHeaders(mFileStat.st_size);
                 m_iv[0].iov_base = mWriteBuf;
                 m_iv[0].iov_len = mWriteIndex;
@@ -663,6 +676,8 @@ bool HttpConn::processWrite(HTTP_CODE ret)
         case CGI_REQUEST:
             addStatusLine(200, OK_200_TITLE);
             addHeaders(mCgiLen);
+            if (mMethod == HEAD)
+                break;
             if (!addContent(mCgiBuf))
                 return false;
             break;
@@ -694,6 +709,8 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(const std::string &text)
             } else if (temp == "POST") {
                 mMethod = POST;
                 cgi = 1;
+            }  else if (temp == "HEAD") {
+                mMethod = HEAD;
             } else {
                 return BAD_REQUEST;
             }
