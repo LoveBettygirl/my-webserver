@@ -5,24 +5,46 @@ using namespace std;
 int HttpConn::m_epollfd = -1;
 int HttpConn::mUserCount = 0;
 
-const char *HttpConn::OK_200_TITLE = "OK";
-const char *HttpConn::ERROR_400_TITLE = "Bad Request";
-const char *HttpConn::ERROR_400_FORM = "Your request has bad syntax or is inherently impossible to satisfy.\n";
-const char *HttpConn::ERROR_403_TITLE = "Forbidden";
-const char *HttpConn::ERROR_403_FORM = "You do not have permission to get file from this server.\n";
-const char *HttpConn::ERROR_404_TITLE = "Not Found";
-const char *HttpConn::ERROR_404_FORM = "The requested file was not found on this server.\n";
-const char *HttpConn::ERROR_500_TITLE = "Internal Error";
-const char *HttpConn::ERROR_500_FORM = "There was an unusual problem serving the requested file.\n";
+const char *HttpConn::OK_200_TITLE = "200 OK";
+const char *HttpConn::OK_200_FORM = "<html><head><meta charset=\"utf-8\"><title>200 OK</title></head><body><h2>200 OK</h2><p>Request success.</p><hr><em>MyHTTPServer</em></body></html>";
+const char *HttpConn::ERROR_400_TITLE = "400 Bad Request";
+const char *HttpConn::ERROR_400_FORM = "<html><head><meta charset=\"utf-8\"><title>400 Bad Request</title></head><body><h2>400 Bad Request</h2><p>Your request has bad syntax or is inherently impossible to satisfy.</p><hr><em>MyHTTPServer</em></body></html>";
+const char *HttpConn::ERROR_403_TITLE = "403 Forbidden";
+const char *HttpConn::ERROR_403_FORM = "<html><head><meta charset=\"utf-8\"><title>403 Forbidden</title></head><body><h2>403 Forbidden</h2><p>You do not have permission to get file from this server.</p><hr><em>MyHTTPServer</em></body></html>";
+const char *HttpConn::ERROR_404_TITLE = "404 Not Found";
+const char *HttpConn::ERROR_404_FORM = "<html><head><meta charset=\"utf-8\"><title>404 Not Found</title></head><body><h2>404 Not Found</h2><p>The requested file was not found on this server.</p><hr><em>MyHTTPServer</em></body></html>";
+const char *HttpConn::ERROR_500_TITLE = "500 Internal Error";
+const char *HttpConn::ERROR_500_FORM = "<html><head><meta charset=\"utf-8\"><title>500 Internal Error</title></head><body><h2>500 Internal Error</h2><p>There was an unusual problem serving the requested file.</p><hr><em>MyHTTPServer</em></body></html>";
 
-const char *HttpConn::TYPE_HTML = "text/html";
-const char *HttpConn::TYPE_JPEG = "image/jpeg";
-const char *HttpConn::TYPE_PNG = "image/png";
-const char *HttpConn::TYPE_GIF = "image/gif";
-const char *HttpConn::TYPE_ICO = "image/x-icon";
-const char *HttpConn::TYPE_MP4 = "video/mp4";
+const char *HttpConn::TYPE_BIN = "application/octet-stream";
 
 string HttpConn::docRoot = "./resources";
+
+const unordered_map<string, string> HttpConn::SUFFIX_TYPE = {
+    { ".html",  "text/html" },
+    { ".htm",  "text/html" },
+    { ".xml",   "text/xml" },
+    { ".xhtml", "application/xhtml+xml" },
+    { ".txt",   "text/plain" },
+    { ".rtf",   "application/rtf" },
+    { ".pdf",   "application/pdf" },
+    { ".word",  "application/nsword" },
+    { ".png",   "image/png" },
+    { ".gif",   "image/gif" },
+    { ".ico",   "image/x-icon" },
+    { ".jpg",   "image/jpeg" },
+    { ".jpeg",  "image/jpeg" },
+    { ".au",    "audio/basic" },
+    { ".mpeg",  "video/mpeg" },
+    { ".mpg",   "video/mpeg" },
+    { ".mp4",   "video/mp4" },
+    { ".mpg4",   "video/mp4" },
+    { ".avi",   "video/x-msvideo" },
+    { ".gz",    "application/x-gzip" },
+    { ".tar",   "application/x-tar" },
+    { ".css",   "text/css "},
+    { ".js",    "text/javascript "},
+};
 
 std::unordered_map<std::string, std::string> HttpConn::mUsers;
 
@@ -91,16 +113,14 @@ void HttpConn::closeConn()
 // 循环读取用户数据，直到无数据可读或者对方关闭连接
 bool HttpConn::read()
 {
-    // 缓冲区已满
-    if (mReadIndex >= READ_BUFFER_SIZE) {
-        return false;
-    }
     // 读取到的字节
     int bytesRead = 0;
     while (true) {
-        bytesRead = recv(m_sockfd, mReadBuf + mReadIndex, READ_BUFFER_SIZE - mReadIndex, 0);
+        // bytesRead = recv(m_sockfd, mReadBuf + mReadIndex, READ_BUFFER_SIZE - mReadIndex, 0);
+        int readErrno = 0;
+        bytesRead = readBuffer.readFd(m_sockfd, &readErrno);
         if (bytesRead == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (readErrno == EAGAIN || readErrno == EWOULDBLOCK) {
                 // 没有数据
                 break;
             }
@@ -183,13 +203,13 @@ void HttpConn::initInfos()
     mVersion = "";
     mContentLength = 0;
     mHost = "";
+    mContentType = "";
     mMethod = GET;
-    memset(mReadBuf, 0, READ_BUFFER_SIZE);
     memset(mWriteBuf, 0, WRITE_BUFFER_SIZE);
     memset(mRealFile, 0, FILENAME_LENGTH);
     mLinger = false;
     cgi = 0;
-    mMimeType = TYPE_HTML;
+    mMimeType = TYPE_BIN;
     memset(mCgiBuf, 0, READ_BUFFER_SIZE);
     mCgiLen = 0;
     mFileAddress = nullptr;
@@ -349,6 +369,7 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                 char methEnv[255] = {0};
                 char queryEnv[255] = {0};
                 char lengthEnv[255] = {0};
+                char typeEnv[255] = {0};
 
                 dup2(cgiOutput[1], 1);
                 dup2(cgiInput[0], 0);
@@ -369,6 +390,9 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                     // 存储CONTENT_LENGTH
                     sprintf(lengthEnv, "CONTENT_LENGTH=%d", mContentLength);
                     putenv(lengthEnv);
+                    // 存储CONTENT_TYPE
+                    sprintf(typeEnv, "CONTENT_TYPE=%s", mContentType.c_str());
+                    putenv(typeEnv);
                 }
 
                 execl(mRealFile, mRealFile, nullptr);
@@ -421,6 +445,7 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
 
                 // 回收子进程资源
                 waitpid(pid, nullptr, 0);
+
                 return CGI_REQUEST;
             }
         }
@@ -473,33 +498,33 @@ HttpConn::HTTP_CODE HttpConn::processRead()
 
     // 解析到了请求体也是完整的数据
     // 或者解析到了一行完整的数据
-    while (((mCheckState == CHECK_STATE_CONTENT) && (lineStatus == LINE_OK))
-        || ((lineStatus = parseLine()) == LINE_OK)) {
+    lineStatus = parseLine(); // 规避短路规则
+    while (lineStatus == LINE_OK) {
         // 获取一行数据
-        char *text = getLine();
-        mStartLine = mCheckedIndex;
-        std::cout << "got 1 http line: " << text << std::endl;
+        std::cout << "got 1 http line: " << currLine << std::endl;
 
         switch (mCheckState) {
             case CHECK_STATE_REQUESTLINE: {
-                ret = parseRequestLine(text);
+                ret = parseRequestLine(currLine);
                 if (ret == BAD_REQUEST) {
                     return BAD_REQUEST;
                 }
                 break;
             }
             case CHECK_STATE_HEADER: {
-                ret = parseHeaders(text);
+                ret = parseHeaders(currLine);
                 if (ret == BAD_REQUEST) {
                     return BAD_REQUEST;
                 } else if (ret == GET_REQUEST) { // 已经获得了完整的请求
+                    currLine.clear();
                     return doRequest(); // 解析具体的请求信息
                 }
                 break;
             }
             case CHECK_STATE_CONTENT: {
-                ret = parseContent(text);
+                ret = parseContent(currLine);
                 if (ret == GET_REQUEST) { // 已经获得了完整的请求
+                    currLine.clear();
                     return doRequest(); // 解析具体的请求信息
                 }
                 lineStatus = LINE_OPEN; // 失败，请求数据不完整
@@ -509,6 +534,9 @@ HttpConn::HTTP_CODE HttpConn::processRead()
                 return INTERNAL_ERROR;
             }
         }
+        if (mCheckState != CHECK_STATE_CONTENT)
+            currLine.clear();
+        lineStatus = parseLine();
     }
     return NO_REQUEST;
 }
@@ -578,9 +606,10 @@ void HttpConn::addHeaders(int contentLen)
 
 bool HttpConn::processWrite(HTTP_CODE ret)
 {
+    mQueryString.clear();
     switch (ret) {
         case INTERNAL_ERROR:
-            mMimeType = TYPE_HTML;
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             addStatusLine(500, ERROR_500_TITLE);
             addHeaders(strlen(ERROR_500_FORM));
             if (!addContent(ERROR_500_FORM)) {
@@ -588,7 +617,7 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             }
             break;
         case BAD_REQUEST:
-            mMimeType = TYPE_HTML;
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             addStatusLine(400, ERROR_400_TITLE);
             addHeaders(strlen(ERROR_400_FORM));
             if (!addContent(ERROR_400_FORM)) {
@@ -596,7 +625,7 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             }
             break;
         case NO_RESOURCE:
-            mMimeType = TYPE_HTML;
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             addStatusLine(404, ERROR_404_TITLE);
             addHeaders(strlen(ERROR_404_FORM));
             if (!addContent(ERROR_404_FORM)) {
@@ -604,7 +633,7 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             }
             break;
         case FORBIDDEN_REQUEST:
-            mMimeType = TYPE_HTML;
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             addStatusLine(403, ERROR_403_TITLE);
             addHeaders(strlen(ERROR_403_FORM));
             if (!addContent(ERROR_403_FORM)) {
@@ -624,11 +653,11 @@ bool HttpConn::processWrite(HTTP_CODE ret)
                 return true;
             }
             else {
-                mMimeType = TYPE_HTML;
-                const char *okString = "<html><body></body></html>";
-                addHeaders(strlen(okString));
-                if (!addContent(okString))
+                mMimeType = SUFFIX_TYPE.find(".html")->second;
+                addHeaders(strlen(OK_200_FORM));
+                if (!addContent(OK_200_FORM)) {
                     return false;
+                }
                 break;
             }
         case CGI_REQUEST:
@@ -649,13 +678,13 @@ bool HttpConn::processWrite(HTTP_CODE ret)
 }
 
 // 解析HTTP请求行，获得请求方法，目标URL，HTTP版本
-HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
+HttpConn::HTTP_CODE HttpConn::parseRequestLine(const std::string &text)
 {
-    string str(text);
+    // string str(text);
     // std::cout << "parseRequestLine: " << text << std::endl;
     // TODO: 用正则表达式会简单一些
     // 获取请求方法
-    istringstream is(str);
+    istringstream is(text);
     string temp;
     int i = 0;
     while (is >> temp) {
@@ -676,7 +705,7 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
                     return BAD_REQUEST;
                 mUrl = mUrl.substr(mUrl.find("/", index));
             }
-            int queryIndex = mUrl.find("?");
+            size_t queryIndex = mUrl.find("?");
             if (queryIndex != string::npos) { // url上有参数
                 mQueryString = mUrl.substr(queryIndex + 1);
                 mUrl = mUrl.substr(0, queryIndex);
@@ -689,25 +718,11 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
                 mUrl += "index.html";
             }
             // 解析mimetype
-            string type = mUrl.substr(mUrl.rfind(".") + 1);
-            transform(type.begin(), type.end(), type.begin(), ::tolower);
-            if (type == "html" || type == "htm") {
-                mMimeType = TYPE_HTML;
-            }
-            else if (type == "jpg" || type == "jpeg") {
-                mMimeType = TYPE_JPEG;
-            }
-            else if (type == "png") {
-                mMimeType = TYPE_PNG;
-            }
-            else if (type == "gif") {
-                mMimeType = TYPE_GIF;
-            }
-            else if (type == "ico") {
-                mMimeType = TYPE_ICO;
-            }
-            else if (type == "mp4" || type == "mpg4") {
-                mMimeType = TYPE_MP4;
+            string type = mUrl.substr(mUrl.rfind("."));
+            std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+            auto it = SUFFIX_TYPE.find(type);
+            if (it != SUFFIX_TYPE.end()) {
+                mMimeType = it->second;
             }
         } else if (i == 2) { // version
             if (temp != "HTTP/1.1") {
@@ -726,10 +741,10 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(char *text)
     return NO_REQUEST;
 }
 
-HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text)
+HttpConn::HTTP_CODE HttpConn::parseHeaders(const std::string &text)
 {
     // 遇到空行，表示头部字段解析完毕
-    if(text[0] == '\0') {
+    if(text.empty()) {
         // 如果HTTP请求有消息体，则还需要读取m_content_length字节的消息体，
         // 状态机转移到CHECK_STATE_CONTENT状态
         if (mContentLength != 0) { // 说明有请求体
@@ -740,23 +755,19 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text)
         return GET_REQUEST;
     }
     string str(text);
-    istringstream is(str);
     string temp, key, value;
-    int i = 0;
-    while (is >> temp) {
-        if (i == 0) {
-            key = temp;
-        } else if (i == 1) {
-            value = temp;
-        }
-        i++;
-    }
-
-    if (i != 2) {
+    size_t index = str.find(":");
+    if (index == string::npos) {
         std::cout << "oop! unknown header " << text << std::endl;
         return NO_REQUEST;
     }
-    
+    index++;
+    key = str.substr(0, index);
+    while (index != str.size() && (str[index] == ' ' || str[index] == '\t')) {
+        index++;
+    }
+    value = str.substr(index);
+
     if (key == "Connection:") {
         // 处理Connection 头部字段  Connection: keep-alive
         if (value == "keep-alive") {
@@ -765,6 +776,9 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text)
     } else if (key == "Content-Length:") {
         // 处理Content-Length头部字段
         mContentLength = stol(value);
+    } else if (key == "Content-Type:") {
+        // 处理Content-Type头部字段
+        mContentType = value;
     } else if (key == "Host:") {
         // 处理Host头部字段
         mHost = value;
@@ -774,12 +788,11 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(char *text)
     return NO_REQUEST;
 }
 
-HttpConn::HTTP_CODE HttpConn::parseContent(char *text)
+HttpConn::HTTP_CODE HttpConn::parseContent(const std::string &text)
 {
     // 数据是否被完整读入
-    if (mReadIndex >= (mContentLength + mCheckedIndex)) {
-        text[mContentLength] = '\0';
-        mQueryString = text;
+    if (text.size() >= mContentLength) {
+        mQueryString.append(text, 0, mContentLength);
         return GET_REQUEST;
     }
     return NO_REQUEST;
@@ -787,31 +800,54 @@ HttpConn::HTTP_CODE HttpConn::parseContent(char *text)
 
 // 解析一行，判断依据\r\n
 HttpConn::LINE_STATUS HttpConn::parseLine() {
+    if (mCheckState == CHECK_STATE_CONTENT) {
+        size_t restSize = mContentLength - currLine.size();
+        if (readBuffer.readableBytes() >= restSize) {
+            currLine.append(readBuffer.peek(), restSize);
+            readBuffer.retrieve(restSize);
+        }
+        else {
+            currLine.append(readBuffer.peek(), readBuffer.readableBytes());
+            readBuffer.retrieveAll();
+        }
+        if (currLine.size() == mContentLength) {
+            return LINE_OK;
+        }
+        return LINE_OPEN;
+    }
     char temp;
     // 遍历一行数据
-    for (; mCheckedIndex < mReadIndex; ++mCheckedIndex) {
-        temp = mReadBuf[mCheckedIndex];
+    const char *p = readBuffer.peek();
+    for (; p != readBuffer.beginWriteConst(); ++p) {
+        temp = *p;
+        if (mCheckState == CHECK_STATE_CONTENT) {
+            currLine.push_back(temp);
+            continue;
+        }
         if (temp == '\r') {
-            if (mCheckedIndex + 1 == mReadIndex) {
+            if (p + 1 == readBuffer.beginWriteConst()) {
+                readBuffer.retrieveUntil(p + 1);
                 return LINE_OPEN; // 这一行不完整
-            } else if (mReadBuf[mCheckedIndex + 1] == '\n') {
+            } else if (*(p + 1) == '\n') {
                 // 将\r\n消除掉
-                mReadBuf[mCheckedIndex++] = '\0';
-                mReadBuf[mCheckedIndex++] = '\0';
+                readBuffer.retrieveUntil(p + 2);
                 return LINE_OK; // 完整解析到了一行
             }
+            readBuffer.retrieveUntil(p);
             return LINE_BAD;
         } else if (temp == '\n') {
             // 判断前面一个字符是不是\r
-            if ((mCheckedIndex > 1) && (mReadBuf[mCheckedIndex - 1] == '\r')) {
+            if ((p != readBuffer.peek()) && (*(p - 1) == '\r')) {
                 // 将\r\n消除掉
-                mReadBuf[mCheckedIndex - 1] = '\0';
-                mReadBuf[mCheckedIndex++] = '\0';
+                readBuffer.retrieveUntil(p + 1);
                 return LINE_OK; // 完整解析到了一行
             }
+            readBuffer.retrieveUntil(p);
             return LINE_BAD;
         }
+        currLine.push_back(temp);
     }
+    readBuffer.retrieveAll();
     return LINE_OPEN;
 }
 

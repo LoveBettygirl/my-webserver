@@ -13,6 +13,7 @@ void Config::showUsage(const char *argv)
     cerr << "Options:" << endl;
     cerr << " -p, --port=PORT         The port of the server." << endl;
     cerr << " -r, --doc_root=PATH     The root directory of resources." << endl;
+    cerr << " -c                      Close log." << endl;
     cerr << " -v, --version           Print the version number and exit." << endl;
     cerr << " -h, --help              Print this message and exit." << endl;
     exit(INVALID_OPTION);
@@ -25,6 +26,7 @@ void Config::parseArgs(int argc, char *argv[])
         static struct option long_options[] = {
             {"port", required_argument, 0, 'p'},
             {"doc_root", required_argument, 0, 'r'},
+            {"close_log", no_argument, 0, 'c'},
             {"version", no_argument, 0, 'v'},
             {"help", no_argument, 0, 'h'},
             {0, 0, 0, 0}};
@@ -45,6 +47,10 @@ void Config::parseArgs(int argc, char *argv[])
 
         case 'r':
             docRoot = optarg;
+            break;
+
+        case 'c':
+            closeLog = 1;
             break;
 
         case 'v':

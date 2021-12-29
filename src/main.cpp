@@ -10,7 +10,7 @@ int main(int argc, char *argv[])
     Config config;
     config.parseArgs(argc, argv);
 
-    WebServer server(config.port, config.docRoot, 0, user, password, databaseName);
+    WebServer server(config.port, config.docRoot, config.closeLog, user, password, databaseName);
     server.start();
 
     return SUCCESS;

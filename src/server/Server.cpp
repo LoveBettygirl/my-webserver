@@ -70,6 +70,7 @@ bool WebServer::doClientData()
 
     char ip[16] = {0};
     inet_ntop(AF_INET, &client_address.sin_addr ,ip, sizeof(ip));
+    int port = ntohs(client_address.sin_port);
 
     if (HttpConn::getUserCount() >= MAX_FD) {
         // 目前连接数满了
@@ -79,7 +80,7 @@ bool WebServer::doClientData()
         return false;
     }
 
-    LOG_INFO("client(%s) is connected", ip);
+    LOG_INFO("client(%s:%d) is connected", ip, port);
 
     // 将新的客户端数据初始化，放到数组中
     addClientInfo(connfd, client_address);

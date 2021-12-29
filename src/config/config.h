@@ -13,6 +13,7 @@ public:
     void parseArgs(int argc, char *argv[]);
     int port = 10000;
     string docRoot = "./resources";
+    int closeLog = 0;
 private:
     void showVersion();
     void showUsage(const char *argv);

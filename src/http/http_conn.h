@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sys/wait.h>
+#include "../buffer/buffer.h"
 
 class HttpConn {
 private:
@@ -52,6 +53,7 @@ private:
 
     // 定义HTTP响应的一些状态信息
     static const char *OK_200_TITLE;
+    static const char *OK_200_FORM;
     static const char *ERROR_400_TITLE;
     static const char *ERROR_400_FORM;
     static const char *ERROR_403_TITLE;
@@ -62,15 +64,11 @@ private:
     static const char *ERROR_500_FORM;
 
     // mimetype
-    static const char *TYPE_HTML;
-    static const char *TYPE_JPEG;
-    static const char *TYPE_PNG;
-    static const char *TYPE_GIF;
-    static const char *TYPE_ICO;
-    static const char *TYPE_MP4;
+    static const char *TYPE_BIN;
+    static const unordered_map<string, string> SUFFIX_TYPE;
 
-    static const int READ_BUFFER_SIZE = 2048;
-    static const int WRITE_BUFFER_SIZE = 1024;
+    static const int READ_BUFFER_SIZE = 65535;
+    static const int WRITE_BUFFER_SIZE = 65535;
     static const int FILENAME_LENGTH = 200; // 文件名的最大长度
 
 public:
@@ -92,7 +90,6 @@ public:
 private:
     int m_sockfd; // 该HTTP连接的socket
     sockaddr_in m_address; // 通信的socket地址
-    char mReadBuf[READ_BUFFER_SIZE]; // 读缓冲区
     int mReadIndex; // 标识读缓冲区中以及读入的客户端数据的最后一个字节的下标（下一次从这里开始读）
 
     int mCheckedIndex; // 当前正在分析的字符在读缓冲区的位置
@@ -101,8 +98,10 @@ private:
     std::string mVersion; // 协议版本，只支持1.1
     METHOD mMethod; // 请求方法
     std::string mHost; // 主机名
+    std::string mContentType;
     bool mLinger; // 是否保持连接（keep-alive）
     int mContentLength; // HTTP请求的消息总长度
+    std::string currLine;
 
     CHECK_STATE mCheckState; // 主状态机当前所处的状态
 
@@ -113,6 +112,7 @@ private:
     struct stat mFileStat; // 目标文件的状态。通过它我们可以判断文件是否存在、是否为目录、是否可读，并获取文件大小等信息
     struct iovec m_iv[2]; // 要写的内存块，有两块：一块是空行前面的响应行（mWriteBuf），另一块是空行之后的文件缓冲区（mFileAddress）
     int m_iv_Count; // 被写内存块的数量
+    Buffer readBuffer; // 可变的读缓冲区
 
     int mBytesHaveSend; // 将要发送的数据的字节数
     int mBytesToSend; // 已经发送的字节数
@@ -136,9 +136,9 @@ private:
 
     HTTP_CODE processRead(); // 解析HTTP请求，主状态机
     bool processWrite(HTTP_CODE ret);
-    HTTP_CODE parseRequestLine(char *text); // 解析请求首行
-    HTTP_CODE parseHeaders(char *text); // 解析请求头
-    HTTP_CODE parseContent(char *text); // 解析请求体
+    HTTP_CODE parseRequestLine(const std::string &text); // 解析请求首行
+    HTTP_CODE parseHeaders(const std::string &text); // 解析请求头
+    HTTP_CODE parseContent(const std::string &text); // 解析请求体
 
     bool addStatusLine(int status, const char *title); // 生成响应首行
     bool addResponse(const char *format, ...); // 往缓冲区中写入待发送的数据
@@ -155,11 +155,6 @@ private:
     HTTP_CODE doRequest();
 
     void unmap(); // 解除对文件的内存映射
-
-    // 获取一行数据
-    char *getLine() {
-        return mReadBuf + mStartLine;
-    }
 };
 
 #endif
