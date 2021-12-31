@@ -15,6 +15,7 @@
 #include <cctype>
 #include <sys/wait.h>
 #include "../buffer/buffer.h"
+#include "url.h"
 
 class HttpConn {
 private:

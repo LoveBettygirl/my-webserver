@@ -510,7 +510,8 @@ HttpConn::HTTP_CODE HttpConn::processRead()
     lineStatus = parseLine(); // 规避短路规则
     while (lineStatus == LINE_OK) {
         // 获取一行数据
-        std::cout << "got 1 http line: " << currLine << std::endl;
+        if (mCheckState != CHECK_STATE_CONTENT)
+            std::cout << "got 1 http line: " << currLine << std::endl;
 
         switch (mCheckState) {
             case CHECK_STATE_REQUESTLINE: {
@@ -741,6 +742,7 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(const std::string &text)
             if (it != SUFFIX_TYPE.end()) {
                 mMimeType = it->second;
             }
+            mUrl = urlDecode(mUrl);
         } else if (i == 2) { // version
             if (temp != "HTTP/1.1") {
                 return BAD_REQUEST;
