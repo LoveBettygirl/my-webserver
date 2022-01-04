@@ -138,8 +138,8 @@ bool HttpConn::write()
         }
         else {
             m_iv[0].iov_base = mWriteBuf + mBytesHaveSend;
-            // m_iv[0].iov_len = m_iv[0].iov_len - temp;
-            m_iv[0].iov_len = m_iv[0].iov_len - mBytesHaveSend;
+            m_iv[0].iov_len = m_iv[0].iov_len - temp;
+            // m_iv[0].iov_len = m_iv[0].iov_len - mBytesHaveSend;
         }
 
         if (mBytesToSend <= 0) {

@@ -3,16 +3,19 @@
 
 Buffer::Buffer(int initBuffSize) : buffer(initBuffSize), readPos(0), writePos(0) {}
 
+// 还没有被读走的字节数
 size_t Buffer::readableBytes() const
 {
     return writePos - readPos;
 }
 
+// writepos之后还能写的字节数
 size_t Buffer::writableBytes() const
 {
     return buffer.size() - writePos;
 }
 
+// readpos之前还能写的字节数（这些字节已经被读走，所以这部分是可写的）
 size_t Buffer::prependableBytes() const
 {
     return readPos;
@@ -145,9 +148,11 @@ const char *Buffer::beginPtr() const
 
 void Buffer::makeSpace(size_t len)
 {
+    // 如果前后能写的总字节数小于len，直接扩展空间
     if (writableBytes() + prependableBytes() < len) {
         buffer.resize(writePos + len + 1);
     } 
+    // 否则，将剩余未读走的字节前移到缓冲区首地址处
     else {
         size_t readable = readableBytes();
         std::copy(beginPtr() + readPos, beginPtr() + writePos, beginPtr());
