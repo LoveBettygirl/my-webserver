@@ -52,36 +52,6 @@ HttpConn::HttpConn() {}
 
 HttpConn::~HttpConn() {}
 
-void HttpConn::initMySQLResult()
-{
-    ConnectionPool *connPool = ConnectionPool::getInstance();
-
-    // 先从连接池中取一个连接
-    auto mysqlRAII = connPool->getConnection();
-    MYSQL *mysql = mysqlRAII.get();
-
-    // 在user表中检索username，password数据，浏览器端输入
-    if (mysql_query(mysql, "SELECT username, password FROM user")) {
-        LOG_ERROR("SELECT error: %s", mysql_error(mysql));
-    }
-
-    // 从表中检索完整的结果集
-    MYSQL_RES *result = mysql_store_result(mysql);
-
-    // 返回结果集中的列数
-    int numFields = mysql_num_fields(result);
-
-    // 返回所有字段结构的数组
-    MYSQL_FIELD *fields = mysql_fetch_fields(result);
-
-    // 从结果集中获取下一行，将对应的用户名和密码，存入map中
-    while (MYSQL_ROW row = mysql_fetch_row(result)) {
-        string temp1(row[0]);
-        string temp2(row[1]);
-        mUsers[temp1] = temp2;
-    }
-}
-
 void HttpConn::init(int sockfd, const sockaddr_in &addr)
 {
     m_sockfd = sockfd;
@@ -190,7 +160,8 @@ bool HttpConn::write()
 
 void HttpConn::initInfos()
 {
-    mysql = nullptr;
+    mysql.setConn(nullptr);
+    redis.setConn(nullptr);
     mBytesHaveSend = 0;
     mBytesToSend = 0;
     mCheckState = CHECK_STATE_REQUESTLINE; // 初始化状态为解析请求首行
@@ -203,6 +174,7 @@ void HttpConn::initInfos()
     mContentLength = 0;
     mHost = "";
     mContentType = "";
+    mCookie = "";
     mMethod = GET;
     memset(mWriteBuf, 0, WRITE_BUFFER_SIZE);
     memset(mRealFile, 0, FILENAME_LENGTH);
@@ -229,14 +201,17 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
     string filename = docRoot;
     strcpy(mRealFile, filename.c_str());
     int len = filename.size();
-    int index = mUrl.rfind("/");
 
     // 处理cgi
     if (cgi) {
+        string regStr = "/register/", logStr = "/login/";
+        int regIndex = mUrl.find(regStr), logIndex = mUrl.find(logStr);
+        int register_ = mUrl.find(regStr + "3"), login = mUrl.find(logStr + "2");
         // 登录校验
-        if (mUrl[index + 1] == '2' || mUrl[index + 1] == '3') {
+        if (register_ == 0 || login == 0) {
             // 将用户名和密码提取出来
             // user=123&password=123
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             char name[100] = {0}, password[100] = {0};
             int i;
             for (i = 5; mQueryString[i] != '&'; ++i)
@@ -248,54 +223,220 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                 password[j] = mQueryString[i];
             password[j] = '\0';
 
-            if (mUrl[index + 1] == '3') {
+            if (register_ == 0) {
                 // 如果是注册，先检测数据库中是否有重名的
                 // 没有重名的，进行增加数据
-                char sqlInsert[200] = {0};
-                sprintf(sqlInsert, "INSERT INTO user(username, password) VALUES('%s', '%s')", name, password);
-
-                if (mUsers.find(name) == mUsers.end()) {
-                    mLock.lock();
-                    int res = mysql_query(mysql, sqlInsert);
-                    mUsers.insert(pair<string, string>(name, password));
-                    mLock.unlock();
-
-                    if (!res)
-                        mUrl = "/log.html";
-                    else
+                
+                // 先查redis有没有缓存
+                string res = redis.getStrValue(name);
+                if (res.empty()) { // 如果没有，就去数据库中找
+                    string realPwd = mysql.findUser(name);
+                    if (realPwd.empty()) { // 没找到用户，准备插入新用户
+                        if (!mysql.insertUser(name, password)) { // 插入失败
+                            mUrl = "/registerError.html";
+                        }
+                        else { // 插入成功，说明确实是新用户，也需要在缓存中记录
+                            mUrl = "/log.html";
+                            redis.setStrValue(name, password, USER_INFO_EXPIRE);
+                        }
+                    }
+                    else { // 找到了，说明用户已经注册过了，同时缓存正确的密码
                         mUrl = "/registerError.html";
+                        redis.setStrValue(name, realPwd, USER_INFO_EXPIRE);
+                    }
                 }
-                else
+                else { // 如果有缓存，说明也是注册过了
                     mUrl = "/registerError.html";
+                    redis.setStrValue(name, res, USER_INFO_EXPIRE);
+                }
+                mCookie = "";
             }
             // 如果是登录，直接判断
             // 若浏览器端输入的用户名和密码在表中可以查找到，返回1，否则返回0
-            else if (mUrl[index + 1] == '2') {
-                if (mUsers.find(name) != mUsers.end() && mUsers[name] == password)
-                    mUrl = "/welcome.html";
-                else
-                    mUrl = "/logError.html";
+            else if (login == 0) {
+                // 客户端发来了cookie，应付刚登录之后又重新提交表单的情形
+                if (!mCookie.empty()) {
+                    Cookie cookie(mCookie);
+                    unordered_map<string, string> session = redis.getHashAllValue(cookie.getSessionId());
+                    // 如果服务端没有对应的cookie，就跳转到登录界面
+                    if (session.empty()) {
+                        mUrl = "/log.html";
+                        cookie.setMaxAge(0);
+                        cookie.setPath(logStr);
+                        mCookie = cookie.getCookie(); // 告诉用户这个cookie作废了
+                    }
+                    // 否则，跳转到欢迎界面，并更新session内容和超时
+                    else {
+                        mUrl = "/welcome.html";
+                        cout << "load session: ";
+                        for (auto &item : session) {
+                            cout << item.first << ": " << item.second << " ";
+                        }
+                        cout << endl;
+                        mCookie = ""; // 清空cookie，表明响应包中没有cookie
+                        redis.setAnyHashValue(cookie.getSessionId(), {{"name", session["name"]}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                    }
+                }
+                else {
+                    // 先查redis有没有缓存
+                    string res = redis.getStrValue(name);
+                    if (res.empty()) { // 如果没有，就去数据库中找
+                        string realPwd = mysql.findUser(name);
+                        if (realPwd == password) { // 登录成功，分配cookie
+                            Cookie cookie(name, password, logStr);
+                            mCookie = cookie.getCookie();
+                            cout << "create session for " << name << ", id: " << cookie.getSessionId() << endl;
+                            redis.setAnyHashValue(cookie.getSessionId(), {{"name", name}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                            redis.setStrValue(name, password, USER_INFO_EXPIRE);
+                            mUrl = "/welcome.html";
+                        }
+                        else { // 登录失败，跳转到登录失败界面
+                            mUrl = "/logError.html";
+                            mCookie = "";
+                            // 如果有对应的密码，要缓存正确的密码
+                            if (!realPwd.empty()) {
+                                redis.setStrValue(name, realPwd, USER_INFO_EXPIRE);
+                            }
+                        }
+                    }
+                    else { // 如果有缓存，需要比对密码是否正确
+                        if (res == password) { // 登录成功，分配cookie
+                            Cookie cookie(name, password, logStr);
+                            mCookie = cookie.getCookie();
+                            cout << "create session for " << name << ", id: " << cookie.getSessionId() << endl;
+                            redis.setAnyHashValue(cookie.getSessionId(), {{"name", name}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                            mUrl = "/welcome.html";
+                        }
+                        else { // 登录失败，跳转到登录失败界面
+                            mUrl = "/logError.html";
+                            mCookie = "";
+                        }
+                        redis.setStrValue(name, res, USER_INFO_EXPIRE);
+                    }
+                }
             }
             strncpy(mRealFile + len, mUrl.c_str(), FILENAME_LENGTH - len - 1);
         }
-        else if (mUrl[index + 1] == '0') {
+        else if (regIndex == 0 && mUrl[regStr.size()] == '0') {
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
             string urlReal = "/register.html";
             strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
         }
-        else if (mUrl[index + 1] == '1') {
-            string urlReal = "/log.html";
-            strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+        else if (logIndex == 0 && mUrl[logStr.size()] == '1') {
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
+            
+            // 客户端发来了cookie
+            if (!mCookie.empty()) {
+                Cookie cookie(mCookie);
+                unordered_map<string, string> session = redis.getHashAllValue(cookie.getSessionId());
+                // 如果服务端没有对应的cookie，就跳转到登录界面
+                if (session.empty()) {
+                    mUrl = "/log.html";
+                    cookie.setMaxAge(0);
+                    cookie.setPath(logStr);
+                    mCookie = cookie.getCookie(); // 告诉用户这个cookie作废了
+                }
+                // 否则，跳转到欢迎界面，并更新session内容和超时
+                else {
+                    mUrl = "/welcome.html";
+                    cout << "load session: ";
+                    for (auto &item : session) {
+                        cout << item.first << ": " << item.second << " ";
+                    }
+                    cout << endl;
+                    mCookie = ""; // 清空cookie，表明响应包中没有cookie
+                    redis.setAnyHashValue(cookie.getSessionId(), {{"name", session["name"]}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                }
+                strncpy(mRealFile + len, mUrl.c_str(), FILENAME_LENGTH - len - 1);
+            }
+            else {
+                string urlReal = "/log.html";
+                strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+                mCookie = ""; // 清空cookie，表明响应包中没有cookie
+            }
         }
-        else if (mUrl[index + 1] == '5') {
-            string urlReal = "/picture.html";
-            strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+        else if (logIndex == 0 && mUrl[logStr.size()] == '5') {
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
+            
+            if (!mCookie.empty()) {
+                Cookie cookie(mCookie);
+                unordered_map<string, string> session = redis.getHashAllValue(cookie.getSessionId());
+                // 如果服务端没有对应的cookie，就跳转到登录界面
+                if (session.empty()) {
+                    mUrl = "/log.html";
+                    cookie.setMaxAge(0);
+                    cookie.setPath(logStr);
+                    mCookie = cookie.getCookie(); // 告诉用户这个cookie作废了
+                }
+                // 否则，跳转到欢迎界面，并更新session内容和超时
+                else {
+                    mUrl = "/picture.html";
+                    cout << "load session: ";
+                    for (auto &item : session) {
+                        cout << item.first << ": " << item.second << " ";
+                    }
+                    cout << endl;
+                    mCookie = ""; // 清空cookie，表明响应包中没有cookie
+                    redis.setAnyHashValue(cookie.getSessionId(), {{"name", session["name"]}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                }
+                strncpy(mRealFile + len, mUrl.c_str(), FILENAME_LENGTH - len - 1);
+            }
+            else {
+                string urlReal = "/log.html";
+                strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+                mCookie = ""; // 清空cookie，表明响应包中没有cookie
+            }
         }
-        else if (mUrl[index + 1] == '6') {
-            string urlReal = "/video.html";
-            strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+        else if (logIndex == 0 && mUrl[logStr.size()] == '6') {
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
+            
+            if (!mCookie.empty()) {
+                Cookie cookie(mCookie);
+                unordered_map<string, string> session = redis.getHashAllValue(cookie.getSessionId());
+                // 如果服务端没有对应的cookie，就跳转到登录界面
+                if (session.empty()) {
+                    mUrl = "/log.html";
+                    cookie.setMaxAge(0);
+                    cookie.setPath(logStr);
+                    mCookie = cookie.getCookie(); // 告诉用户这个cookie作废了
+                }
+                // 否则，跳转到欢迎界面，并更新session内容和超时
+                else {
+                    mUrl = "/video.html";
+                    cout << "load session: ";
+                    for (auto &item : session) {
+                        cout << item.first << ": " << item.second << " ";
+                    }
+                    cout << endl;
+                    mCookie = ""; // 清空cookie，表明响应包中没有cookie
+                    redis.setAnyHashValue(cookie.getSessionId(), {{"name", session["name"]}, {"last_login", to_string((uint32_t)time(nullptr))}}, SESSION_EXPIRE);
+                }
+                strncpy(mRealFile + len, mUrl.c_str(), FILENAME_LENGTH - len - 1);
+            }
+            else {
+                string urlReal = "/log.html";
+                strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
+                mCookie = ""; // 清空cookie，表明响应包中没有cookie
+            }
         }
-        else if (mUrl[index + 1] == '7') {
-            string urlReal = "/fans.html";
+        else if (logIndex == 0 && mUrl[logStr.size()] == '7') {
+            // Cookie处理
+            if (!mCookie.empty()) {
+                Cookie cookie(mCookie);
+                string sessionId = cookie.getSessionId();
+                // 查找是否存在session，存在则删除（因为有可能session已经过期了，就不用再删除了）
+                unordered_map<string, string> session = redis.getHashAllValue(cookie.getSessionId());
+                if (!session.empty()) {
+                    redis.setTTL(cookie.getSessionId()); // 删除对应的session
+                }
+                cout << "delete cookie: " << mCookie << endl;
+                cookie.setMaxAge(0); // 指示客户端删除cookie
+                cookie.setPath(logStr);
+                mCookie = cookie.getCookie();
+            }
+
+            mMimeType = SUFFIX_TYPE.find(".html")->second;
+            string urlReal = "/logout.html";
             strncpy(mRealFile + len, urlReal.c_str(), urlReal.size());
         }
         else { // 动态解析cgi
@@ -370,6 +511,7 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                 char lengthEnv[255] = {0};
                 char typeEnv[255] = {0};
                 char rootEnv[255] = {0};
+                char cookieEnv[255] = {0};
 
                 dup2(cgiOutput[1], 1);
                 dup2(cgiInput[0], 0);
@@ -381,27 +523,31 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                     strcpy(methEnv, "REQUEST_METHOD=GET");
                     putenv(methEnv);
                     // 存储QUERY_STRING
-                    sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
+                    std::sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
                     putenv(queryEnv);
                 }
                 else if (mMethod == HEAD) {
                     strcpy(methEnv, "REQUEST_METHOD=HEAD");
                     putenv(methEnv);
                     // 存储QUERY_STRING
-                    sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
+                    std::sprintf(queryEnv, "QUERY_STRING=%s", mQueryString.c_str());
                     putenv(queryEnv);
                 }
                 else if (mMethod == POST) {
                     strcpy(methEnv, "REQUEST_METHOD=POST");
                     putenv(methEnv);
                     // 存储CONTENT_LENGTH
-                    sprintf(lengthEnv, "CONTENT_LENGTH=%d", mContentLength);
+                    std::sprintf(lengthEnv, "CONTENT_LENGTH=%d", mContentLength);
                     putenv(lengthEnv);
                     // 存储CONTENT_TYPE
-                    sprintf(typeEnv, "CONTENT_TYPE=%s", mContentType.c_str());
+                    std::sprintf(typeEnv, "CONTENT_TYPE=%s", mContentType.c_str());
                     putenv(typeEnv);
                 }
-                sprintf(rootEnv, "DOCUMENT_ROOT=%s", docRoot.c_str());
+                if (!mCookie.empty()) {
+                    std::sprintf(cookieEnv, "HTTP_COOKIE=%s", mCookie.c_str());
+                    putenv(cookieEnv);
+                }
+                std::sprintf(rootEnv, "DOCUMENT_ROOT=%s", docRoot.c_str());
                 putenv(rootEnv);
 
                 execl(mRealFile, mRealFile, nullptr);
@@ -590,6 +736,11 @@ bool HttpConn::addServerInfo()
     return addResponse("Server: %s\r\n", "MyHTTPServer/1.0");
 }
 
+bool HttpConn::addCookie()
+{
+    return addResponse("Set-Cookie: %s\r\n", mCookie.c_str());
+}
+
 bool HttpConn::addLinger()
 {
     return addResponse("Connection: %s\r\n", (mLinger == true) ? "keep-alive" : "close");
@@ -652,6 +803,8 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             break;
         case FILE_REQUEST:
             addStatusLine(200, OK_200_TITLE);
+            if (!mCookie.empty() && cgi)
+                addCookie();
             if (mMethod == HEAD) {
                 addHeaders(mFileStat.st_size);
                 break;
@@ -676,6 +829,8 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             }
         case CGI_REQUEST:
             addStatusLine(200, OK_200_TITLE);
+            if (!mCookie.empty() && cgi)
+                addCookie();
             addHeaders(mCgiLen);
             if (mMethod == HEAD)
                 break;
@@ -735,14 +890,17 @@ HttpConn::HTTP_CODE HttpConn::parseRequestLine(const std::string &text)
             if (mUrl.back() == '/') {
                 mUrl += "index.html";
             }
-            // 解析mimetype
-            string type = mUrl.substr(mUrl.rfind("."));
-            std::transform(type.begin(), type.end(), type.begin(), ::tolower);
-            auto it = SUFFIX_TYPE.find(type);
-            if (it != SUFFIX_TYPE.end()) {
-                mMimeType = it->second;
-            }
             mUrl = urlDecode(mUrl);
+            // 解析mimetype
+            size_t dotIndex = mUrl.rfind(".");
+            if (dotIndex != string::npos) {
+                string type = mUrl.substr(dotIndex);
+                std::transform(type.begin(), type.end(), type.begin(), ::tolower);
+                auto it = SUFFIX_TYPE.find(type);
+                if (it != SUFFIX_TYPE.end()) {
+                    mMimeType = it->second;
+                }
+            }
         } else if (i == 2) { // version
             if (temp != "HTTP/1.1") {
                 return BAD_REQUEST;
@@ -801,6 +959,10 @@ HttpConn::HTTP_CODE HttpConn::parseHeaders(const std::string &text)
     } else if (key == "Host:") {
         // 处理Host头部字段
         mHost = value;
+    } else if (key == "Cookie:") {
+        // 处理Cookie
+        mCookie = value;
+        cgi = 1;
     } else {
         std::cout << "oop! unknown header " << text << std::endl;
     }

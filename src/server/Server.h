@@ -9,7 +9,7 @@
 #include "../epoll/epoll.h"
 #include "../log/log.h"
 #include "../timer/Timer.h"
-#include "../mysql/mysql_connection_pool.h"
+#include "../mysql/mysql.h"
 
 class WebServer {
 private:
@@ -36,7 +36,7 @@ private:
 
     void logWrite();
     void threadPool();
-    void mySqlPool();
+    void connectionPool();
     void eventListen();
     void eventLoop();
     void doWrite(int sockfd);

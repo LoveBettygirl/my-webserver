@@ -10,12 +10,14 @@
 #include "../utils/utils.h"
 #include "../epoll/epoll.h"
 #include <unordered_map>
-#include "../mysql/mysql_connection_pool.h"
+#include "../mysql/mysql.h"
 #include <algorithm>
 #include <cctype>
 #include <sys/wait.h>
 #include "../buffer/buffer.h"
 #include "url.h"
+#include "cookie.h"
+#include "../redis/redis.h"
 
 class HttpConn {
 private:
@@ -71,6 +73,8 @@ private:
     static const int READ_BUFFER_SIZE = 65535;
     static const int WRITE_BUFFER_SIZE = 65535;
     static const int FILENAME_LENGTH = 200; // 文件名的最大长度
+    static const int SESSION_EXPIRE = 3600; // session持续时长3600s
+    static const int USER_INFO_EXPIRE = 7200; // session持续时长3600s
 
 public:
     HttpConn();
@@ -80,7 +84,8 @@ public:
     void closeConn(); // 关闭连接
     bool read(); // 非阻塞的读
     bool write(); // 非阻塞的写
-    void setMySQL(MYSQL *mysql) { this->mysql = mysql; }
+    void setMySQL(MYSQL *conn) { this->mysql.setConn(conn); }
+    void setRedis(redisContext *conn) { this->redis.setConn(conn); }
     static void tick();
     static void setEpollfd(int fd);
     static int getUserCount();
@@ -102,7 +107,11 @@ private:
     std::string mContentType;
     bool mLinger; // 是否保持连接（keep-alive）
     int mContentLength; // HTTP请求的消息总长度
+    std::string mCookie;
     std::string currLine;
+
+    Redis redis;
+    MySQL mysql;
 
     CHECK_STATE mCheckState; // 主状态机当前所处的状态
 
@@ -118,7 +127,6 @@ private:
     int mBytesHaveSend; // 将要发送的数据的字节数
     int mBytesToSend; // 已经发送的字节数
 
-    MYSQL *mysql;
     int cgi;
     std::string mQueryString;
     Locker mLock;
@@ -150,6 +158,7 @@ private:
     bool addLinger();
     bool addBlankLine();
     bool addContent(const char *content);
+    bool addCookie();
 
     LINE_STATUS parseLine();
 

@@ -7,7 +7,8 @@
 #include <memory>
 #include <vector>
 #include "locker.h"
-#include "../mysql/mysql_connection_pool.h"
+#include "../mysql/mysql.h"
+#include "../redis/redis.h"
 
 // 线程池类，定义成模板类是为了代码复用，T是任务类
 // 线程池的本质是一个生产者消费者模型
@@ -126,9 +127,14 @@ void ThreadPool<T>::run()
             continue;
         }
 
-        ConnectionPool *connPool = ConnectionPool::getInstance();
-        auto mysqlRAII = connPool->getConnection();
+        MySQLConnectionPool *mysqlConnPool = MySQLConnectionPool::getInstance();
+        auto mysqlRAII = mysqlConnPool->getConnection();
         request->setMySQL(mysqlRAII.get());
+
+        RedisConnectionPool *redisConnPool = RedisConnectionPool::getInstance();
+        auto redisRAII = redisConnPool->getConnection();
+        request->setRedis(redisRAII.get());
+
         request->process(); // 处理任务
     }
 }

@@ -216,14 +216,16 @@ void WebServer::threadPool()
     }
 }
 
-void WebServer::mySqlPool()
+void WebServer::connectionPool()
 {
     // 初始化数据库连接池
-    ConnectionPool *connPool = ConnectionPool::getInstance();
-    connPool->init("localhost", mUser, mPassword, mDatabaseName, 3306, 8, mCloseLog);
+    MySQLConnectionPool *mysqlConnPool = MySQLConnectionPool::getInstance();
+    mysqlConnPool->init("localhost", mUser, mPassword, mDatabaseName, 3306, 8);
 
+    RedisConnectionPool *redisConnPool = RedisConnectionPool::getInstance();
+    redisConnPool->init("127.0.0.1", 6379, 8);
     // 初始化数据库读取表
-    HttpConn::initMySQLResult();
+    // HttpConn::initMySQLResult();
 }
 
 void WebServer::eventListen()
@@ -299,7 +301,7 @@ int WebServer::start()
 {
     logWrite();
 
-    mySqlPool();
+    connectionPool();
 
     threadPool();
 

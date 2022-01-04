@@ -8,7 +8,7 @@ PROJECT_BINARY ?= $(BUILD_DIR)/$(PROJECT_NAME)
 # Compilation flags
 CXX = g++
 LD = g++
-CXXFLAGS   += -O2 -MMD -std=c++11 -pthread -lmysqlclient
+CXXFLAGS   += -O2 -MMD -std=c++11 -pthread -lmysqlclient -lhiredis
 
 # Files to be compiled
 SRCS = $(shell find ./src -name "*.cpp")
@@ -30,7 +30,7 @@ app: $(PROJECT_BINARY)
 
 # Link
 $(PROJECT_BINARY): $(OBJS)
-	@$(LD) -O2 -o $@ $^ -pthread -lmysqlclient
+	@$(LD) -O2 -o $@ $^ -pthread -lmysqlclient -lhiredis
 
 clean: 
 	rm -rf $(OBJ_DIR)

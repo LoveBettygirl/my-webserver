@@ -1,5 +1,5 @@
-#ifndef CONNECTION_POOL_H
-#define CONNECTION_POOL_H
+#ifndef MYSQL_H
+#define MYSQL_H
 
 #include <cstdio>
 #include <list>
@@ -16,20 +16,20 @@
 
 using namespace std;
 
-class ConnectionPool {
+class MySQLConnectionPool {
 public:
     unique_ptr<MYSQL, function<void(MYSQL *)>> getConnection(); // 获取数据库连接
     bool releaseConnection(MYSQL *conn); // 释放连接
     int getFreeConn(); // 获取连接
     void destroyPool(); // 销毁所有连接
 
-    static ConnectionPool *getInstance();
+    static MySQLConnectionPool *getInstance();
 
-    void init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn, int closeLog);
+    void init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn);
 
 private:
-    ConnectionPool();
-    ~ConnectionPool();
+    MySQLConnectionPool();
+    ~MySQLConnectionPool();
 
     int mMaxConn; // 最大连接数
     int mCurConn; // 当前已使用的连接数
@@ -40,11 +40,25 @@ private:
 
 public:
     string mUrl; // 主机地址
-    string mPort; // 数据库端口号
+    int mPort; // 数据库端口号
     string mUser; // 登陆数据库用户名
     string mPassWord; // 登陆数据库密码
     string mDatabaseName; // 使用数据库名
-    int mCloseLog; // 日志开关
+};
+
+class MySQL {
+public:
+    MySQL() {}
+    ~MySQL() {}
+
+    bool insertUser(const string &user, const string &pwd);
+
+    string findUser(const string &user);
+
+    void setConn(MYSQL *conn) { this->conn = conn; }
+
+private:
+    MYSQL *conn;
 };
 
 #endif

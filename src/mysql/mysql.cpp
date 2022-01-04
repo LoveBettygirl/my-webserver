@@ -4,26 +4,25 @@
 #include <list>
 #include <pthread.h>
 #include <iostream>
-#include "mysql_connection_pool.h"
+#include "mysql.h"
 
 using namespace std;
 
-ConnectionPool::ConnectionPool() : mCurConn(0), mFreeConn(0) {}
+MySQLConnectionPool::MySQLConnectionPool() : mCurConn(0), mFreeConn(0) {}
 
-ConnectionPool *ConnectionPool::getInstance()
+MySQLConnectionPool *MySQLConnectionPool::getInstance()
 {
-    static ConnectionPool connPool;
+    static MySQLConnectionPool connPool;
     return &connPool;
 }
 
-void ConnectionPool::init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn, int closeLog)
+void MySQLConnectionPool::init(const string &url, const string &user, const string &passWord, const string &databaseName, int port, int maxConn)
 {
     mUrl = url;
     mPort = port;
     mUser = user;
     mPassWord = passWord;
     mDatabaseName = databaseName;
-    mCloseLog = closeLog;
 
     for (int i = 0; i < maxConn; i++) {
         MYSQL *con = nullptr;
@@ -50,7 +49,7 @@ void ConnectionPool::init(const string &url, const string &user, const string &p
 
 
 // 当有请求时，从数据库连接池中返回一个可用连接，更新使用和空闲连接数
-unique_ptr<MYSQL, function<void(MYSQL *)>> ConnectionPool::getConnection()
+unique_ptr<MYSQL, function<void(MYSQL *)>> MySQLConnectionPool::getConnection()
 {
     MYSQL *con = nullptr;
 
@@ -69,12 +68,12 @@ unique_ptr<MYSQL, function<void(MYSQL *)>> ConnectionPool::getConnection()
 
     lock.unlock();
     return unique_ptr<MYSQL, function<void(MYSQL *)>>(con, [](MYSQL *mysql) {
-        ConnectionPool::getInstance()->releaseConnection(mysql);
+        MySQLConnectionPool::getInstance()->releaseConnection(mysql);
     });
 }
 
 // 释放当前使用的连接
-bool ConnectionPool::releaseConnection(MYSQL *con)
+bool MySQLConnectionPool::releaseConnection(MYSQL *con)
 {
     if (con == nullptr)
         return false;
@@ -92,7 +91,7 @@ bool ConnectionPool::releaseConnection(MYSQL *con)
 }
 
 // 销毁数据库连接池
-void ConnectionPool::destroyPool()
+void MySQLConnectionPool::destroyPool()
 {
     lock.lock();
     if (connList.size() > 0) {
@@ -109,12 +108,44 @@ void ConnectionPool::destroyPool()
 }
 
 // 当前空闲的连接数
-int ConnectionPool::getFreeConn()
+int MySQLConnectionPool::getFreeConn()
 {
     return this->mFreeConn;
 }
 
-ConnectionPool::~ConnectionPool()
+MySQLConnectionPool::~MySQLConnectionPool()
 {
     destroyPool();
+}
+
+string MySQL::findUser(const string &user)
+{
+    char sql[1024] = {0};
+    sprintf(sql, "SELECT username, password FROM user where username = '%s'", user.c_str());
+
+    if (mysql_query(conn, sql)) {
+        LOG_ERROR("SELECT error: %s", mysql_error(conn));
+        return "";
+    }
+
+    // 从表中检索完整的结果集
+    MYSQL_RES *result = mysql_use_result(conn);
+
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row != nullptr) {
+        return row[1];
+    }
+    return "";
+}
+
+bool MySQL::insertUser(const string &user, const string &pwd)
+{
+    char sql[1024] = {0};
+    sprintf(sql, "INSERT INTO user(username, password) VALUES('%s', '%s')", user.c_str(), pwd.c_str());
+
+    if (mysql_query(conn, sql)) {
+        LOG_ERROR("INSERT error: %s", mysql_error(conn));
+        return false;
+    }
+    return true;
 }
