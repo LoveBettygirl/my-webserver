@@ -3,7 +3,7 @@
 using namespace std;
 
 int WebServer::pipefd[2] = {};
-TimerList WebServer::timerList;
+TimerHeap WebServer::timerHeap;
 
 WebServer::WebServer(int port, const string &docRoot, int closeLog, const string &user, const string &password, const string &databaseName):
     port(port),
@@ -37,9 +37,14 @@ void WebServer::sigHandler(int sig)
 void WebServer::timerHandler()
 {
     // 定时处理任务，实际上就是调用tick()函数
-    timerList.tick();
-    // 因为一次 alarm 调用只会引起一次SIGALARM 信号，所以我们要重新定时，以不断触发 SIGALARM信号。
+    timerHeap.tick();
+    // 因为一次 alarm 调用只会引起一次SIGALRM 信号，所以我们要重新定时，以不断触发 SIGALRM信号。
     alarm(TIMESLOT);
+}
+
+void WebServer::closeConn(int sockfd)
+{
+    usersConn[sockfd]->closeConn();
 }
 
 void WebServer::addClientInfo(int connfd, struct sockaddr_in client_address)
@@ -47,14 +52,7 @@ void WebServer::addClientInfo(int connfd, struct sockaddr_in client_address)
     usersConn[connfd] = make_shared<HttpConn>();
     usersConn[connfd]->init(connfd, client_address);
 
-    usersTimer[connfd] = make_shared<ClientData>(client_address, connfd);
-    shared_ptr<Timer> timer = make_shared<Timer>();
-    timer->setUserData(usersTimer[connfd]);
-    timer->setExpire(time(nullptr) + 3 * TIMESLOT);
-    Callback callback(epollfd);
-    timer->setCallback(callback);
-    usersTimer[connfd]->setTimer(timer);
-    timerList.addTimer(timer);
+    timerHeap.addTimer(connfd, client_address, time(nullptr) + 3 * TIMESLOT, bind(&WebServer::closeConn, this, connfd));
 }
 
 bool WebServer::doClientData()
@@ -106,6 +104,7 @@ bool WebServer::doSignal(bool &timeout, bool &stopServer)
                     break;
                 }
                 case SIGTERM:
+                case SIGINT:
                 {
                     stopServer = true;
                     break;
@@ -116,42 +115,35 @@ bool WebServer::doSignal(bool &timeout, bool &stopServer)
     return true;
 }
 
-void WebServer::doTimer(shared_ptr<Timer> timer, int sockfd)
+void WebServer::doTimer(int sockfd)
 {
-    timer->getCallback()(usersTimer[sockfd]);
-    if (timer) {
-        timerList.delTimer(timer);
-    }
+    timerHeap.doTimer(sockfd);
 }
 
-void WebServer::adjustTimer(shared_ptr<Timer> timer)
+void WebServer::adjustTimer(int sockfd, time_t expire)
 {
-    timerList.adjustTimer(timer, time(nullptr) + 3 * TIMESLOT);
+    timerHeap.adjustTimer(sockfd, expire);
 }
 
 void WebServer::doRead(int sockfd)
 {
-    shared_ptr<Timer> timer = usersTimer[sockfd]->getTimer();
     if (usersConn[sockfd]->read()) {
         // 一次性把所有数据都读完
         pool->append(usersConn[sockfd]);
-        if (timer)
-            adjustTimer(timer);
+        adjustTimer(sockfd, time(nullptr) + 3 * TIMESLOT);
     } else {
-        doTimer(timer, sockfd);
+        doTimer(sockfd);
     }
 }
 
 void WebServer::doWrite(int sockfd)
 {
-    shared_ptr<Timer> timer = usersTimer[sockfd]->getTimer();
     // 一次性把所有数据都写完
     if (usersConn[sockfd]->write()) {
-        if (timer)
-            adjustTimer(timer);
+        adjustTimer(sockfd, time(nullptr) + 3 * TIMESLOT);
     }
     else {
-        doTimer(timer, sockfd);
+        doTimer(sockfd);
     }
 }
 
@@ -177,7 +169,7 @@ void WebServer::eventLoop()
             else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
                 // 对方异常端口或者错误等事件
                 // 关闭连接
-                doTimer(usersTimer[sockfd]->getTimer(), sockfd);
+                doTimer(sockfd);
             }
             else if ((sockfd == pipefd[0]) && (events[i].events & EPOLLIN)) {
                 // 说明有信号到来，要处理信号
@@ -293,8 +285,10 @@ void WebServer::eventListen()
     addsig(SIGPIPE, SIG_IGN);
     addsig(SIGALRM, sigHandler);
     addsig(SIGTERM, sigHandler);
+    addsig(SIGINT, sigHandler);
+    addsig(SIGHUP, SIG_IGN);
 
-    alarm(TIMESLOT);  // 定时，5秒后产生SIGALARM信号
+    alarm(TIMESLOT);  // 定时，5秒后产生SIGALRM信号
 }
 
 int WebServer::start()

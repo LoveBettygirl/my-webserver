@@ -116,13 +116,14 @@ private:
     CHECK_STATE mCheckState; // 主状态机当前所处的状态
 
     char mRealFile[FILENAME_LENGTH]; // 客户请求的目标文件的完整路径，其内容等于 doc_root + m_url, doc_root是网站根目录
-    char mWriteBuf[WRITE_BUFFER_SIZE];  // 写缓冲区
     int mWriteIndex; // 写缓冲区中待发送的字节数
     char *mFileAddress; // 客户请求的目标文件被mmap到内存中的起始位置
     struct stat mFileStat; // 目标文件的状态。通过它我们可以判断文件是否存在、是否为目录、是否可读，并获取文件大小等信息
     struct iovec m_iv[2]; // 要写的内存块，有两块：一块是空行前面的响应行（mWriteBuf），另一块是空行之后的文件缓冲区（mFileAddress）
     int m_iv_Count; // 被写内存块的数量
     Buffer readBuffer; // 可变的读缓冲区
+    Buffer writeBuffer;
+    Buffer cgiBuffer;
 
     int mBytesHaveSend; // 将要发送的数据的字节数
     int mBytesToSend; // 已经发送的字节数
@@ -132,7 +133,6 @@ private:
     Locker mLock;
 
     std::string mMimeType;
-    char mCgiBuf[READ_BUFFER_SIZE];  // cgi缓冲区
     int mCgiLen;
 
     static int m_epollfd; // 所有的socket上的事件都被注册到同一个epoll对象中
@@ -150,7 +150,7 @@ private:
     HTTP_CODE parseContent(const std::string &text); // 解析请求体
 
     bool addStatusLine(int status, const char *title); // 生成响应首行
-    bool addResponse(const char *format, ...); // 往缓冲区中写入待发送的数据
+    bool addResponse(const string &str); // 往缓冲区中写入待发送的数据
     void addHeaders(int contentLen); // 生成响应头
     bool addContentLength(int contentLen);
     bool addServerInfo();
@@ -159,6 +159,7 @@ private:
     bool addBlankLine();
     bool addContent(const char *content);
     bool addCookie();
+    bool addCgiContent();
 
     LINE_STATUS parseLine();
 

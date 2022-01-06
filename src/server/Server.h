@@ -22,12 +22,11 @@ private:
     int listenfd;
     sockaddr_in address;
     std::unordered_map<int, std::shared_ptr<HttpConn>> usersConn;
-    std::unordered_map<int, std::shared_ptr<ClientData>> usersTimer;
     std::shared_ptr<ThreadPool<HttpConn>> pool; // 线程池
     static int pipefd[2];
     epoll_event events[MAX_EVENT_NUM];
     static const int TIMESLOT = 5; // 每隔5s的定时，检测有没有任务超时
-    static TimerList timerList;
+    static TimerHeap timerHeap;
 
     std::string mUser; // 登陆数据库用户名
     std::string mPassword; // 登陆数据库密码
@@ -44,8 +43,9 @@ private:
     bool doClientData();
     bool doSignal(bool &timeout, bool &stopServer);
     void addClientInfo(int connfd, struct sockaddr_in client_address);
-    void doTimer(std::shared_ptr<Timer> timer, int sockfd);
-    void adjustTimer(std::shared_ptr<Timer> timer);
+    void doTimer(int sockfd);
+    void adjustTimer(int sockfd, time_t expire);
+    void closeConn(int sockfd);
 
 public:
     WebServer(int port, const std::string &docRoot, int closeLog, const std::string &user, const std::string &password, const std::string &databaseName);

@@ -107,7 +107,7 @@ bool HttpConn::write()
 {
     int temp = 0;
     
-    if (mBytesToSend == 0) {
+    if (m_iv[0].iov_len + m_iv[1].iov_len == 0) {
         // 将要发送的字节为0，这一次响应结束。
         modifyfd(m_epollfd, m_sockfd, EPOLLIN); 
         initInfos();
@@ -131,18 +131,21 @@ bool HttpConn::write()
         mBytesToSend -= temp;
         mBytesHaveSend += temp;
 
-        if (mBytesHaveSend >= m_iv[0].iov_len) {
-            m_iv[0].iov_len = 0;
-            m_iv[1].iov_base = mFileAddress + (mBytesHaveSend - mWriteIndex);
-            m_iv[1].iov_len = mBytesToSend;
+        if (temp > m_iv[0].iov_len) {
+            m_iv[1].iov_base = (uint8_t*)m_iv[1].iov_base + (temp - m_iv[0].iov_len);
+            m_iv[1].iov_len -= (temp - m_iv[0].iov_len);
+            if (m_iv[0].iov_len) {
+                writeBuffer.retrieveAll();
+                m_iv[0].iov_len = 0;
+            }
         }
         else {
-            m_iv[0].iov_base = mWriteBuf + mBytesHaveSend;
+            m_iv[0].iov_base = (uint8_t*)m_iv[0].iov_base + temp;
             m_iv[0].iov_len = m_iv[0].iov_len - temp;
-            // m_iv[0].iov_len = m_iv[0].iov_len - mBytesHaveSend;
+            writeBuffer.retrieve(temp);
         }
 
-        if (mBytesToSend <= 0) {
+        if (m_iv[0].iov_len + m_iv[1].iov_len == 0) {
             // 没有数据要发送了
             unmap();
             modifyfd(m_epollfd, m_sockfd, EPOLLIN);
@@ -176,12 +179,10 @@ void HttpConn::initInfos()
     mContentType = "";
     mCookie = "";
     mMethod = GET;
-    memset(mWriteBuf, 0, WRITE_BUFFER_SIZE);
     memset(mRealFile, 0, FILENAME_LENGTH);
     mLinger = false;
     cgi = 0;
     mMimeType = TYPE_BIN;
-    memset(mCgiBuf, 0, READ_BUFFER_SIZE);
     mCgiLen = 0;
     mFileAddress = nullptr;
 }
@@ -569,30 +570,27 @@ HttpConn::HTTP_CODE HttpConn::doRequest() {
                 }
 
                 // 读取cgi脚本返回数据
-                char readBuf[READ_BUFFER_SIZE] = {0};
-                ret = ::read(cgiOutput[0], readBuf, sizeof(readBuf));
+                int currErrno = 0;
+                ret = cgiBuffer.readFd(cgiOutput[0], &currErrno);
                 if (ret <= 0) {
                     perror("read");
                     LOG_ERROR("%s", "Read from pipe failed.");
                     return INTERNAL_ERROR;
                 }
                 // TODO: 严格的来说，这里还需要再解析可能出现的响应头信息，这里只处理Content-Type
-                if (strncasecmp(readBuf, "Content-Type:", 13) == 0) {
+                const char *p = cgiBuffer.peek();
+                if (strncasecmp(p, "Content-Type:", 13) == 0) {
                     int i = 13;
-                    while (readBuf[i] == ' ' && readBuf[i] != '\0')
+                    while (p[i] == ' ' && p[i] != '\0')
                         i++;
                     mMimeType.clear();
-                    while (readBuf[i] != '\n' && readBuf[i] != '\0')
-                        mMimeType.push_back(readBuf[i++]);
-                    if (readBuf[i] == '\n')
+                    while (p[i] != '\n' && p[i] != '\0')
+                        mMimeType.push_back(p[i++]);
+                    if (p[i] == '\n')
                         i += 2;
-                    mCgiLen = ret - i;
-                    memcpy(mCgiBuf, readBuf + i, mCgiLen);
+                    cgiBuffer.retrieve(i);
                 }
-                else {
-                    mCgiLen = ret;
-                    memcpy(mCgiBuf, readBuf, mCgiLen);
-                }
+                mCgiLen = cgiBuffer.readableBytes();
 
                 // 运行结束关闭
                 close(cgiOutput[0]);
@@ -697,63 +695,55 @@ HttpConn::HTTP_CODE HttpConn::processRead()
     return NO_REQUEST;
 }
 
-bool HttpConn::addResponse(const char *format, ...)
+bool HttpConn::addResponse(const string &str)
 {
-    // 缓冲区写满了
-    if(mWriteIndex >= WRITE_BUFFER_SIZE) {
-        return false;
-    }
-    va_list argList;
-    va_start(argList, format);
-    // 从哪开始写入发送数据
-    int len = vsnprintf(mWriteBuf + mWriteIndex, WRITE_BUFFER_SIZE - 1 - mWriteIndex, format, argList);
-    if (len >= (WRITE_BUFFER_SIZE - 1 - mWriteIndex)) {
-        va_end(argList);
-        return false;
-    }
-    mWriteIndex += len;
-    va_end(argList);
+    writeBuffer.append(str);
     return true;
 }
 
 bool HttpConn::addStatusLine(int status, const char *title)
 {
-    return addResponse("%s %d %s\r\n", "HTTP/1.1", status, title);
+    return addResponse("HTTP/1.1 " + to_string(status) + " " + title + "\r\n");
 }
 
 bool HttpConn::addContentLength(int contentLen)
 {
-    return addResponse("Content-Length: %d\r\n", contentLen);
+    return addResponse("Content-Length: " + to_string(contentLen) + "\r\n");
 }
 
 bool HttpConn::addContentType()
 {
-    return addResponse("Content-Type: %s\r\n", mMimeType.c_str());
+    return addResponse("Content-Type: " + mMimeType + "\r\n");
 }
 
 bool HttpConn::addServerInfo()
 {
-    return addResponse("Server: %s\r\n", "MyHTTPServer/1.0");
+    return addResponse("Server: MyHTTPServer/1.0\r\n");
 }
 
 bool HttpConn::addCookie()
 {
-    return addResponse("Set-Cookie: %s\r\n", mCookie.c_str());
+    return addResponse("Set-Cookie: " + mCookie + "\r\n");
 }
 
 bool HttpConn::addLinger()
 {
-    return addResponse("Connection: %s\r\n", (mLinger == true) ? "keep-alive" : "close");
+    return addResponse(string("Connection: ") + ((mLinger == true) ? "keep-alive" : "close") + "\r\n");
 }
 
 bool HttpConn::addBlankLine()
 {
-    return addResponse("%s", "\r\n");
+    return addResponse("\r\n");
 }
 
 bool HttpConn::addContent(const char *content)
 {
-    return addResponse("%s", content);
+    return addResponse(content);
+}
+
+bool HttpConn::addCgiContent()
+{
+    return addResponse(cgiBuffer.retrieveAllToStr());
 }
 
 void HttpConn::addHeaders(int contentLen)
@@ -811,12 +801,12 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             }
             else if (mFileStat.st_size != 0) {
                 addHeaders(mFileStat.st_size);
-                m_iv[0].iov_base = mWriteBuf;
-                m_iv[0].iov_len = mWriteIndex;
+                m_iv[0].iov_base = const_cast<char*>(writeBuffer.peek());
+                m_iv[0].iov_len = writeBuffer.readableBytes();
                 m_iv[1].iov_base = mFileAddress;
                 m_iv[1].iov_len = mFileStat.st_size;
                 m_iv_Count = 2;
-                mBytesToSend = mWriteIndex + mFileStat.st_size; // 响应头的大小+文件的大小
+                mBytesToSend = writeBuffer.readableBytes() + mFileStat.st_size; // 响应头的大小+文件的大小
                 return true;
             }
             else {
@@ -834,17 +824,18 @@ bool HttpConn::processWrite(HTTP_CODE ret)
             addHeaders(mCgiLen);
             if (mMethod == HEAD)
                 break;
-            if (!addContent(mCgiBuf))
+            if (!addCgiContent())
                 return false;
             break;
         default:
             return false;
     }
 
-    m_iv[0].iov_base = mWriteBuf;
-    m_iv[0].iov_len = mWriteIndex;
+    m_iv[0].iov_base = const_cast<char*>(writeBuffer.peek());
+    m_iv[0].iov_len = writeBuffer.readableBytes();
+    m_iv[1].iov_len = 0;
     m_iv_Count = 1;
-    mBytesToSend = mWriteIndex;
+    mBytesToSend = writeBuffer.readableBytes();
     return true;
 }
 
@@ -1044,9 +1035,9 @@ void HttpConn::process()
     // std::cout << "parse request, create response" << std::endl;
     // 生成响应
     bool writeRet = processWrite(readRet);
-    if (!writeRet) {
-        closeConn();
-    }
+    // if (!writeRet) {
+    //     closeConn();
+    // }
     modifyfd(m_epollfd, m_sockfd, EPOLLOUT);
 }
 
