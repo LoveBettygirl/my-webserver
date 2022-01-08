@@ -8,10 +8,12 @@
 #include <cerrno>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include "../common.h"
 
 void addsig(int sig, void (*handler)(int));
 int setnonblocking(int fd);
 void createDir(const char *path);
+void daemon();
 
 #endif

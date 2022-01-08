@@ -30,7 +30,8 @@ enum {
     BLOCK_QUEUE_SIZE_ERROR,
     CREATE_DIR_ERROR,
     MYSQL_ERROR,
-    REDIS_ERROR
+    REDIS_ERROR,
+    FORK_ERROR
 };
 
 #endif

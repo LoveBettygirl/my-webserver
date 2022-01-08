@@ -25,3 +25,35 @@ void createDir(const char *path)
             exit(CREATE_DIR_ERROR);
     }
 }
+
+void daemon()
+{
+    int i;
+    int fd0;
+    pid_t pid;
+    
+    umask(0);
+    
+    pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        exit(FORK_ERROR);
+    }
+    else if (pid > 0) {
+        exit(SUCCESS);
+    }
+    
+    setsid(); // 创建一个会话
+    
+    addsig(SIGCHLD, SIG_IGN); // 忽略子进程退出信号
+    
+    if (chdir("/") < 0) { // 将当前工作目录更改为根目录
+        return;
+    }
+    
+    // 关闭不需要的文件描述符，或者重定向到/dev/null
+    close(0);
+    fd0 = open("/dev/null", O_RDWR);
+    dup2(fd0, 1);
+    dup2(fd0, 2);
+}
