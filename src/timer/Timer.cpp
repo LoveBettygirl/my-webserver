@@ -1,5 +1,10 @@
 #include "Timer.h"
 
+bool operator<(shared_ptr<TimerNode> a, shared_ptr<TimerNode> b)
+{
+    return a->getExpire() < b->getExpire();
+}
+
 bool TimerNode::isValid(time_t cur) const
 {
     return cur < this->expire;
@@ -8,7 +13,7 @@ bool TimerNode::isValid(time_t cur) const
 void TimerHeap::addTimer(int id, sockaddr_in addr, time_t expire, function<void()> callback)
 {
     assert(id >= 0);
-    size_t i;
+    int i;
     if (ref.find(id) == ref.end()) {
         i = heap.size();
         ref[id] = i;
@@ -60,7 +65,7 @@ void TimerHeap::doTimer(int id)
     if (heap.empty() || ref.find(id) == ref.end()) {
         return;
     }
-    size_t i = ref[id];
+    int i = ref[id];
     heap[i]->getCallback()();
     del(i);
 }
@@ -71,11 +76,11 @@ void TimerHeap::clear()
     heap.clear();
 }
 
-void TimerHeap::siftup(size_t i)
+void TimerHeap::siftup(int i)
 {
     assert(i >= 0 && i < heap.size());
-    size_t j = (i - 1) / 2;
-    while (j >= 0) {
+    int j = (i - 1) / 2;
+    while (i > 0) {
         if (heap[j] < heap[i]) { 
             break;
         }
@@ -85,7 +90,7 @@ void TimerHeap::siftup(size_t i)
     }
 }
 
-void TimerHeap::swapNode(size_t i, size_t j)
+void TimerHeap::swapNode(int i, int j)
 {
     assert(i >= 0 && i < heap.size());
     assert(j >= 0 && j < heap.size());
@@ -94,12 +99,12 @@ void TimerHeap::swapNode(size_t i, size_t j)
     ref[heap[j]->getSockfd()] = j;
 } 
 
-bool TimerHeap::siftdown(size_t index, size_t n)
+bool TimerHeap::siftdown(int index, int n)
 {
     assert(index >= 0 && index < heap.size());
     assert(n >= 0 && n <= heap.size());
-    size_t i = index;
-    size_t j = i * 2 + 1;
+    int i = index;
+    int j = i * 2 + 1;
     while (j < n) {
         if (j + 1 < n && heap[j + 1] < heap[j])
             j++;
@@ -112,13 +117,13 @@ bool TimerHeap::siftdown(size_t index, size_t n)
     return i > index;
 }
 
-void TimerHeap::del(size_t index)
+void TimerHeap::del(int index)
 {
     // 删除指定位置的结点
     assert(!heap.empty() && index >= 0 && index < heap.size());
     // 将要删除的结点换到队尾，然后调整堆
-    size_t i = index;
-    size_t n = heap.size() - 1;
+    int i = index;
+    int n = heap.size() - 1;
     assert(i <= n);
     if (i < n) {
         swapNode(i, n);

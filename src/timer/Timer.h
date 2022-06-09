@@ -60,16 +60,16 @@ public:
     void pop();
 
 private:
-    void del(size_t i);
+    void del(int i);
     
-    void siftup(size_t i);
+    void siftup(int i);
 
-    bool siftdown(size_t index, size_t n);
+    bool siftdown(int index, int n);
 
-    void swapNode(size_t i, size_t j);
+    void swapNode(int i, int j);
 
     std::vector<shared_ptr<TimerNode>> heap;
-    std::unordered_map<int, size_t> ref;
+    std::unordered_map<int, int> ref;
 };
 
 #endif
