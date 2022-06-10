@@ -31,7 +31,7 @@ enum {
     CREATE_DIR_ERROR,
     MYSQL_ERROR,
     REDIS_ERROR,
-    FORK_ERROR
+    SYSCALL_ERROR
 };
 
 #endif

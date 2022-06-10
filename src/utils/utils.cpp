@@ -37,7 +37,7 @@ void daemon()
     pid = fork();
     if (pid < 0) {
         perror("fork");
-        exit(FORK_ERROR);
+        exit(SYSCALL_ERROR);
     }
     else if (pid > 0) {
         exit(SUCCESS);
@@ -56,4 +56,21 @@ void daemon()
     fd0 = open("/dev/null", O_RDWR);
     dup2(fd0, 1);
     dup2(fd0, 2);
+}
+
+std::string getPath(const std::string &path)
+{
+    if (path[0] == '/')
+        return path;
+    else if (path.find("~/") == 0) {
+        std::string home = getenv("HOME");
+        return home + "/" + path.substr(2);
+    }
+    char buf[200] = {0};
+    if (!getcwd(buf, sizeof(buf))) {
+        perror("getcwd");
+        exit(SYSCALL_ERROR);
+    }
+    std::string result = buf;
+    return result + "/" + path;
 }

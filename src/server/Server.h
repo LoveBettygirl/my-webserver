@@ -10,6 +10,7 @@
 #include "../log/log.h"
 #include "../timer/Timer.h"
 #include "../mysql/mysql.h"
+#include "../config/config.h"
 
 class WebServer {
 private:
@@ -28,10 +29,19 @@ private:
     static const int TIMESLOT = 5; // 每隔5s的定时，检测有没有任务超时
     static TimerHeap timerHeap;
 
-    std::string mUser; // 登陆数据库用户名
-    std::string mPassword; // 登陆数据库密码
-    std::string mDatabaseName; // 使用数据库名
-    int mCloseLog;
+    int mThreadPoolSize = 8;
+    int mConnectionPoolSize = 8;
+    bool mCloseLog = false;
+    bool mDaemonProcess = false;
+
+    std::string mMySQLIP = "127.0.0.1";
+    int mMySQLPort = 3306;
+    std::string mMySQLUser; // 登陆数据库用户名
+    std::string mMySQLPassword; // 登陆数据库密码
+    std::string mMySQLDatabaseName; // 使用数据库名
+
+    std::string mRedisIP = "127.0.0.1";
+    int mRedisPort = 6379;
 
     void logWrite();
     void threadPool();
@@ -46,9 +56,10 @@ private:
     void doTimer(int sockfd);
     void adjustTimer(int sockfd, time_t expire);
     void closeConn(int sockfd);
+    void setDaemon();
 
 public:
-    WebServer(int port, const std::string &docRoot, int closeLog, const std::string &user, const std::string &password, const std::string &databaseName);
+    WebServer(const Config &config);
     ~WebServer();
     int start();
 

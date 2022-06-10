@@ -5,17 +5,24 @@ using namespace std;
 int WebServer::pipefd[2] = {};
 TimerHeap WebServer::timerHeap;
 
-WebServer::WebServer(int port, const string &docRoot, int closeLog, const string &user, const string &password, const string &databaseName):
-    port(port),
-    mCloseLog(closeLog),
+WebServer::WebServer(const Config &config):
     epollfd(0),
     listenfd(0),
-    mUser(user),
-    mPassword(password),
-    mDatabaseName(databaseName)
+    port(config.port),
+    mCloseLog(config.closeLog),
+    mDaemonProcess(config.daemonProcess),
+    mThreadPoolSize(config.threadPool),
+    mConnectionPoolSize(config.connectionPool),
+    mMySQLUser(config.mysqlUser),
+    mMySQLPassword(config.mysqlPassword),
+    mMySQLDatabaseName(config.mysqlDatabase),
+    mMySQLIP(config.mysqlIP),
+    mMySQLPort(config.mysqlPort),
+    mRedisIP(config.redisIP),
+    mRedisPort(config.redisPort)
 {
-    if (docRoot != "")
-        HttpConn::setDocRoot(docRoot);
+    if (config.docRoot != "")
+        HttpConn::setDocRoot(config.docRoot);
 }
 
 WebServer::~WebServer()
@@ -201,7 +208,7 @@ void WebServer::threadPool()
 {
     // 创建线程池，初始化线程池
     try {
-        pool = shared_ptr<ThreadPool<HttpConn>>(new ThreadPool<HttpConn>());
+        pool = shared_ptr<ThreadPool<HttpConn>>(new ThreadPool<HttpConn>(mThreadPoolSize));
     } catch (...) {
         LOG_ERROR("%s", "Create thread pool failed.");
         exit(CREATE_THREAD_POOL_ERROR);
@@ -212,10 +219,10 @@ void WebServer::connectionPool()
 {
     // 初始化数据库连接池
     MySQLConnectionPool *mysqlConnPool = MySQLConnectionPool::getInstance();
-    mysqlConnPool->init("localhost", mUser, mPassword, mDatabaseName, 3306, 8);
+    mysqlConnPool->init(mMySQLIP, mMySQLUser, mMySQLPassword, mMySQLDatabaseName, mMySQLPort, mConnectionPoolSize);
 
     RedisConnectionPool *redisConnPool = RedisConnectionPool::getInstance();
-    redisConnPool->init("127.0.0.1", 6379, 8);
+    redisConnPool->init(mRedisIP, mRedisPort, mConnectionPoolSize);
     // 初始化数据库读取表
     // HttpConn::initMySQLResult();
 }
@@ -291,8 +298,17 @@ void WebServer::eventListen()
     alarm(TIMESLOT);  // 定时，5秒后产生SIGALRM信号
 }
 
+void WebServer::setDaemon()
+{
+    if (mDaemonProcess) {
+        daemon();
+    }
+}
+
 int WebServer::start()
 {
+    setDaemon();
+
     logWrite();
 
     connectionPool();

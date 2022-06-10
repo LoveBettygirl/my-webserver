@@ -3,14 +3,10 @@
 
 int main(int argc, char *argv[])
 {
-    string user = "root";
-    string password = "123456";
-    string databaseName = "mydb";
-
     Config config;
     config.parseArgs(argc, argv);
 
-    WebServer server(config.port, config.docRoot, config.closeLog, user, password, databaseName);
+    WebServer server(config);
     server.start();
 
     return SUCCESS;
